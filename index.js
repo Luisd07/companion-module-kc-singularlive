@@ -1,7 +1,10 @@
+import fs from 'node:fs'
+
 import { InstanceBase, runEntrypoint } from '@companion-module/base'
 
 import { getActions } from './actions.js'
 import { getFeedbacks } from './feedbacks.js'
+import { getPresets } from './presets.js'
 import api from './lib/api.js'
 
 const MAX_APPS = 8
@@ -14,6 +17,13 @@ const selLabelVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}_label`
 const numValueVarId = (appKey, node) => `num_${appKey}_${sanitize(node)}`
 
 const UNDO_DEPTH = 10
+// Per-app reconnect backoff schedule (ms), clamped to the last value.
+const RECONNECT_BACKOFF = [2000, 5000, 15000, 30000]
+// Consecutive poll failures before a connected app is dropped and reconnected.
+const POLL_FAIL_LIMIT = 3
+
+const appConnectedVarId = (appKey) => `app_${appKey}_connected`
+const appLastSyncVarId = (appKey) => `app_${appKey}_last_sync`
 
 // Config keys that require a reconnect when they change. Everything else (e.g.
 // the persisted-state blob we write back) can change without re-initialising.
@@ -41,6 +51,16 @@ class SingularInstance extends InstanceBase {
 		this.snapshots = new Map()
 		// Undo history of reversible operations (most recent last), capped at UNDO_DEPTH.
 		this.undoStack = []
+		// Session activity log — [{ ts, description }], for post-show CSV export.
+		this.activityLog = []
+		// Rundown positions, keyed by rundown name → current index.
+		this.rundownState = new Map()
+		// Per-app health: key → { label, token, connected, lastSync, backoff, failCount }.
+		this.appStatus = new Map()
+		this.reconnectTimers = new Map()
+		this.apps = []
+		this.appChoices = []
+		this.choicesByToken = {}
 		this.lastAction = ''
 		this.pollTimer = null
 		this.saveTimer = null
@@ -56,6 +76,7 @@ class SingularInstance extends InstanceBase {
 	async destroy() {
 		this.stopPolling()
 		this.clearAllAutoOut()
+		this.clearReconnects()
 		this.connections = new Map()
 		this.compStates = new Map()
 		this.log('debug', 'Singular module destroyed')
@@ -119,6 +140,15 @@ class SingularInstance extends InstanceBase {
 			default: 2,
 		})
 
+		fields.push({
+			type: 'textinput',
+			id: 'logFile',
+			label: 'Activity log CSV file (blank = off)',
+			tooltip: 'Absolute path. Every action fired is appended as a timestamped CSV row for post-show review.',
+			width: 12,
+			default: '',
+		})
+
 		// Hidden field used to persist module state (cycle indices, selection values,
 		// snapshots) across restarts. Not shown to the user.
 		fields.push({
@@ -151,6 +181,7 @@ class SingularInstance extends InstanceBase {
 			selLabels: Object.fromEntries(this.selLabels),
 			numValues: Object.fromEntries(this.numValues),
 			snapshots: Object.fromEntries(this.snapshots),
+			rundownState: Object.fromEntries(this.rundownState),
 		}
 	}
 
@@ -165,6 +196,7 @@ class SingularInstance extends InstanceBase {
 			this.selLabels = new Map(Object.entries(state.selLabels ?? {}))
 			this.numValues = new Map(Object.entries(state.numValues ?? {}))
 			this.snapshots = new Map(Object.entries(state.snapshots ?? {}))
+			this.rundownState = new Map(Object.entries(state.rundownState ?? {}))
 		} catch {
 			this.log('warn', 'Could not parse persisted state; starting fresh')
 		}
@@ -281,6 +313,7 @@ class SingularInstance extends InstanceBase {
 					case 'selection':
 						selections.push({
 							...controlNode,
+							default: node.defaultValue,
 							selections: node.selections?.map((selection) => ({
 								id: selection.id,
 								label: selection.title,
@@ -300,67 +333,188 @@ class SingularInstance extends InstanceBase {
 	async initSingularLive(config) {
 		this.stopPolling()
 		this.clearAllAutoOut()
+		this.clearReconnects()
 		this.loadPersistedState()
 		this.connections = new Map()
+		this.appStatus = new Map()
+		this.choicesByToken = {}
 
-		const apps = this.parseApps(config)
-		if (apps.length === 0) {
-			this.updateStatus('bad_config', 'No API URL or token configured')
-			this.setActionDefinitions(getActions.bind(this)([], {}))
-			this.setFeedbackDefinitions(getFeedbacks.bind(this)([], {}))
-			this.setVariableDefinitions([])
+		this.apps = this.parseApps(config)
+		if (this.apps.length === 0) {
 			this.appChoices = []
-			this.choicesByToken = {}
+			this.updateStatus('bad_config', 'No API URL or token configured')
+			this.refreshDefinitions()
 			return
 		}
 
-		const appChoices = []
-		const choicesByToken = {}
-		let okCount = 0
-
-		for (const app of apps) {
-			try {
-				const conn = new api(app.token)
-				await conn.Connect()
-				const elements = await conn.getElements()
-
-				this.connections.set(app.key, conn)
-				choicesByToken[app.key] = this.buildChoices(elements)
-				appChoices.push({ id: app.key, label: app.label })
-				okCount++
-			} catch (err) {
-				const reason = err && err.toString().toLowerCase() === 'not found' ? 'Invalid token' : err
-				this.log('warn', `Control App "${app.label}": ${reason}`)
-			}
+		// Every configured app appears in the dropdowns (with its label) even if it
+		// fails to connect, so its actions never vanish on a transient failure.
+		this.appChoices = this.apps.map((app) => ({ id: app.key, label: app.label }))
+		for (const app of this.apps) {
+			this.appStatus.set(app.key, {
+				label: app.label,
+				token: app.token,
+				connected: false,
+				lastSync: null,
+				backoff: 0,
+				failCount: 0,
+			})
 		}
 
-		this.appChoices = appChoices
-		this.choicesByToken = choicesByToken
+		await Promise.all(this.apps.map((app) => this.connectApp(app)))
 
-		this.setActionDefinitions(getActions.bind(this)(appChoices, choicesByToken))
-		this.setFeedbackDefinitions(getFeedbacks.bind(this)(appChoices, choicesByToken))
-		this.setVariableDefinitions(this.buildVariableDefinitions(appChoices, choicesByToken))
-		this.initVariableValues(appChoices, choicesByToken)
+		this.pruneState()
+		this.refreshDefinitions()
+		this.updateAppStatusVars()
+		this.updateAggregateStatus()
+		this.startPolling()
+	}
 
-		if (okCount === apps.length) {
+	// (Re)connect a single app. On success updates its choices; on failure keeps
+	// any prior choices (so actions don't vanish) and schedules a backoff retry.
+	async connectApp(app) {
+		const status = this.appStatus.get(app.key)
+		try {
+			const conn = new api(app.token)
+			await conn.Connect()
+			const elements = await conn.getElements()
+
+			this.connections.set(app.key, conn)
+			this.choicesByToken[app.key] = this.buildChoices(elements)
+			if (status) {
+				status.connected = true
+				status.lastSync = Date.now()
+				status.backoff = 0
+				status.failCount = 0
+			}
+			this.clearReconnect(app.key)
+			return true
+		} catch (err) {
+			if (status) status.connected = false
+			const reason = err && err.toString().toLowerCase() === 'not found' ? 'Invalid token' : err
+			this.log('warn', `Control App "${app.label}": ${reason}`)
+			this.scheduleReconnect(app)
+			return false
+		}
+	}
+
+	scheduleReconnect(app) {
+		this.clearReconnect(app.key)
+		const status = this.appStatus.get(app.key)
+		const step = Math.min(status?.backoff ?? 0, RECONNECT_BACKOFF.length - 1)
+		if (status) status.backoff = (status.backoff ?? 0) + 1
+
+		const timer = setTimeout(async () => {
+			this.reconnectTimers.delete(app.key)
+			const ok = await this.connectApp(app)
+			if (ok) {
+				this.pruneState()
+				this.refreshDefinitions()
+			}
+			this.updateAppStatusVars()
+			this.updateAggregateStatus()
+			this.checkFeedbacks('appConnected', 'syncStale')
+		}, RECONNECT_BACKOFF[step])
+
+		this.reconnectTimers.set(app.key, timer)
+	}
+
+	clearReconnect(key) {
+		const timer = this.reconnectTimers.get(key)
+		if (timer) {
+			clearTimeout(timer)
+			this.reconnectTimers.delete(key)
+		}
+	}
+
+	clearReconnects() {
+		for (const timer of this.reconnectTimers.values()) clearTimeout(timer)
+		this.reconnectTimers.clear()
+	}
+
+	// Manual reconnect for one app (or all), used by the Reconnect action.
+	async reconnectApp(token) {
+		const targets = token ? this.apps.filter((a) => a.key === token) : this.apps
+		for (const app of targets) await this.connectApp(app)
+		this.pruneState()
+		this.refreshDefinitions()
+		this.updateAppStatusVars()
+		this.updateAggregateStatus()
+		this.checkFeedbacks('appConnected', 'syncStale')
+	}
+
+	// Rebuild action/feedback/variable/preset definitions from the current choices.
+	// Safe to call anytime — it never touches live connections.
+	refreshDefinitions() {
+		this.setActionDefinitions(getActions.bind(this)(this.appChoices, this.choicesByToken))
+		this.setFeedbackDefinitions(getFeedbacks.bind(this)(this.appChoices, this.choicesByToken))
+		this.setVariableDefinitions(this.buildVariableDefinitions(this.appChoices, this.choicesByToken))
+		this.setPresetDefinitions(getPresets(this.appChoices, this.choicesByToken))
+		this.initVariableValues(this.appChoices, this.choicesByToken)
+	}
+
+	updateAggregateStatus() {
+		const total = this.apps.length
+		if (total === 0) return
+		const connected = this.apps.filter((a) => this.connections.has(a.key)).length
+
+		if (connected === total) {
 			this.updateStatus('ok')
-		} else if (okCount > 0) {
-			this.updateStatus('ok', `${apps.length - okCount} of ${apps.length} apps failed to connect`)
+		} else if (connected > 0) {
+			this.updateStatus('unknown_warning', `${total - connected} of ${total} apps disconnected`)
 		} else {
 			this.updateStatus('connection_failure')
 		}
+	}
 
-		this.startPolling()
+	updateAppStatusVars() {
+		const values = {}
+		for (const app of this.apps) {
+			const status = this.appStatus.get(app.key)
+			values[appConnectedVarId(app.key)] = this.connections.has(app.key) ? 'true' : 'false'
+			values[appLastSyncVarId(app.key)] = status?.lastSync
+				? `${Math.round((Date.now() - status.lastSync) / 1000)}s ago`
+				: 'never'
+		}
+		this.setVariableValues(values)
+	}
+
+	// Drop persisted state entries for nodes that no longer exist in a connected
+	// app's model, so the blob doesn't grow forever. Only prunes apps we could read.
+	pruneState() {
+		for (const app of this.apps) {
+			const choices = this.choicesByToken[app.key]
+			if (!choices) continue
+
+			const selIds = new Set(choices.selections.map((s) => s.id))
+			const numIds = new Set(choices.numbers.map((n) => n.id))
+			const prefix = `${app.key}|`
+
+			for (const map of [this.cycleState, this.selValues, this.selLabels]) {
+				for (const key of [...map.keys()]) {
+					if (key.startsWith(prefix) && !selIds.has(key.slice(prefix.length))) map.delete(key)
+				}
+			}
+			for (const key of [...this.numValues.keys()]) {
+				if (key.startsWith(prefix) && !numIds.has(key.slice(prefix.length))) this.numValues.delete(key)
+			}
+		}
 	}
 
 	buildVariableDefinitions(appChoices, choicesByToken) {
 		const defs = [
 			{ variableId: 'last_action', name: 'Last action' },
 			{ variableId: 'undo_last', name: 'Undo — next action to undo' },
+			{ variableId: 'snapshots_export', name: 'Snapshots (JSON export)' },
+			{ variableId: 'activity_count', name: 'Activity log — rows this session' },
 		]
 
 		for (const app of appChoices) {
+			defs.push({ variableId: appConnectedVarId(app.id), name: `${app.label} — connected` })
+			defs.push({ variableId: appLastSyncVarId(app.id), name: `${app.label} — last sync` })
+
 			const choices = choicesByToken[app.id]
+			if (!choices) continue
 			for (const comp of choices.compositions) {
 				defs.push({ variableId: compStateVarId(app.id, comp.id), name: `${app.label} / ${comp.label} — state` })
 			}
@@ -373,6 +527,14 @@ class SingularInstance extends InstanceBase {
 			}
 		}
 
+		// Guard against sanitize() collisions (e.g. "Row 01" vs "Row-01") — warn
+		// rather than silently overwrite a variable.
+		const seen = new Set()
+		for (const def of defs) {
+			if (seen.has(def.variableId)) this.log('warn', `Duplicate variable id after sanitize: ${def.variableId}`)
+			seen.add(def.variableId)
+		}
+
 		return defs
 	}
 
@@ -380,10 +542,19 @@ class SingularInstance extends InstanceBase {
 		const values = {
 			last_action: this.lastAction,
 			undo_last: this.undoStack[this.undoStack.length - 1]?.description ?? '',
+			snapshots_export: '',
+			activity_count: String(this.activityLog.length),
 		}
 
 		for (const app of appChoices) {
+			const status = this.appStatus.get(app.id)
+			values[appConnectedVarId(app.id)] = this.connections.has(app.id) ? 'true' : 'false'
+			values[appLastSyncVarId(app.id)] = status?.lastSync
+				? `${Math.round((Date.now() - status.lastSync) / 1000)}s ago`
+				: 'never'
+
 			const choices = choicesByToken[app.id]
+			if (!choices) continue
 			for (const comp of choices.compositions) {
 				values[compStateVarId(app.id, comp.id)] = this.compStates.get(`${app.id}|${comp.id}`) ?? ''
 			}
@@ -404,7 +575,9 @@ class SingularInstance extends InstanceBase {
 
 		const values = {}
 		for (const app of this.appChoices) {
-			for (const comp of this.choicesByToken[app.id].compositions) {
+			const choices = this.choicesByToken[app.id]
+			if (!choices) continue
+			for (const comp of choices.compositions) {
 				values[compStateVarId(app.id, comp.id)] = this.compStates.get(`${app.id}|${comp.id}`) ?? ''
 			}
 		}
@@ -427,7 +600,7 @@ class SingularInstance extends InstanceBase {
 		}
 
 		this.setVariableValues(values)
-		this.checkFeedbacks('selectionActiveValue')
+		this.checkFeedbacks('selectionActiveValue', 'selectionIsOneOf', 'cyclePositionIs')
 		this.persist()
 	}
 
@@ -436,6 +609,7 @@ class SingularInstance extends InstanceBase {
 
 		this.numValues.set(`${token}|${controlnode}`, value)
 		this.setVariableValues({ [numValueVarId(token, controlnode)]: value })
+		this.checkFeedbacks('numberThreshold')
 		this.persist()
 	}
 
@@ -451,7 +625,46 @@ class SingularInstance extends InstanceBase {
 
 	recordAction(description) {
 		this.lastAction = description
-		this.setVariableValues({ last_action: description })
+		const ts = new Date().toISOString()
+		this.activityLog.push({ ts, description })
+		if (this.activityLog.length > 5000) this.activityLog.shift()
+		this.setVariableValues({ last_action: description, activity_count: String(this.activityLog.length) })
+		this.appendActivityLine(ts, description)
+	}
+
+	csvRow(ts, description) {
+		return `"${ts}","${String(description).replace(/"/g, '""')}"`
+	}
+
+	appendActivityLine(ts, description) {
+		const file = this.config?.logFile?.trim()
+		if (!file) return
+		try {
+			if (!fs.existsSync(file)) fs.writeFileSync(file, 'timestamp,action\n')
+			fs.appendFileSync(file, `${this.csvRow(ts, description)}\n`)
+		} catch (err) {
+			this.log('debug', `Activity log write failed: ${err}`)
+		}
+	}
+
+	exportActivityLog(file) {
+		const target = (file || this.config?.logFile || '').trim()
+		if (!target) {
+			this.log('warn', 'Export activity log: no file path given')
+			return
+		}
+		try {
+			const rows = ['timestamp,action', ...this.activityLog.map((e) => this.csvRow(e.ts, e.description))]
+			fs.writeFileSync(target, `${rows.join('\n')}\n`)
+			this.log('info', `Activity log (${this.activityLog.length} rows) exported to ${target}`)
+		} catch (err) {
+			this.log('warn', `Activity log export failed: ${err}`)
+		}
+	}
+
+	clearActivityLog() {
+		this.activityLog = []
+		this.setVariableValues({ activity_count: '0' })
 	}
 
 	// Optimistically update a composition's on-air state so feedback is instant
@@ -461,7 +674,7 @@ class SingularInstance extends InstanceBase {
 
 		this.compStates.set(`${token}|${comp}`, state)
 		this.setVariableValues({ [compStateVarId(token, comp)]: state })
-		this.checkFeedbacks('compositionIsIn')
+		this.checkFeedbacks('compositionIsIn', 'anyCompLive')
 	}
 
 	// Take Out All clears every composition in the app — reflect that at once,
@@ -474,7 +687,7 @@ class SingularInstance extends InstanceBase {
 			values[compStateVarId(token, comp.id)] = 'Out'
 		}
 		this.setVariableValues(values)
-		this.checkFeedbacks('compositionIsIn')
+		this.checkFeedbacks('compositionIsIn', 'anyCompLive')
 
 		const prefix = `${token}|`
 		const keys = [...this.autoOutTimers.keys()].filter((key) => key.startsWith(prefix))
@@ -540,7 +753,7 @@ class SingularInstance extends InstanceBase {
 			values[compStateVarId(token, comp)] = state
 		}
 		this.setVariableValues(values)
-		this.checkFeedbacks('compositionIsIn')
+		this.checkFeedbacks('compositionIsIn', 'anyCompLive')
 	}
 
 	// Capture the current on-air states and Companion-set selection values for an
@@ -593,6 +806,7 @@ class SingularInstance extends InstanceBase {
 		this.undoStack.push({ description, undo })
 		while (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift()
 		this.setVariableValues({ undo_last: description })
+		this.checkFeedbacks('undoAvailable')
 	}
 
 	async undoLast() {
@@ -605,6 +819,7 @@ class SingularInstance extends InstanceBase {
 		await entry.undo()
 		this.recordAction(`Undo: ${entry.description}`)
 		this.setVariableValues({ undo_last: this.undoStack[this.undoStack.length - 1]?.description ?? '' })
+		this.checkFeedbacks('undoAvailable')
 	}
 
 	// Each capture* reads the current state and returns a closure that restores it.
@@ -672,36 +887,103 @@ class SingularInstance extends InstanceBase {
 		this.polling = true
 
 		try {
-			for (const [key, conn] of this.connections) {
+			for (const [key, conn] of [...this.connections]) {
+				const status = this.appStatus.get(key)
 				try {
 					const states = await conn.getModelStates()
 					for (const [comp, state] of Object.entries(states)) {
 						this.compStates.set(`${key}|${comp}`, state)
 					}
+					if (status) {
+						status.lastSync = Date.now()
+						status.failCount = 0
+						status.connected = true
+					}
 				} catch (err) {
 					this.log('debug', `Poll failed for app ${key}: ${err}`)
+					if (status) {
+						status.failCount = (status.failCount ?? 0) + 1
+						// Drop a persistently-failing connection and let the backoff
+						// reconnect loop recover it, without disturbing healthy apps.
+						if (status.failCount >= POLL_FAIL_LIMIT) {
+							this.connections.delete(key)
+							status.connected = false
+							const app = this.apps.find((a) => a.key === key)
+							if (app) this.scheduleReconnect(app)
+						}
+					}
 				}
 			}
 
 			this.updateStateVariables()
-			this.checkFeedbacks('compositionIsIn')
+			this.updateAppStatusVars()
+			this.checkFeedbacks('compositionIsIn', 'anyCompLive', 'appConnected', 'syncStale')
 		} finally {
 			this.polling = false
 		}
 	}
 
-	handleConnectionError() {
-		this.log('error', 'Singular.Live connection lost')
-		this.updateStatus('connection_failure')
+	// Snapshot import/export helpers (used by the Import/Export Snapshots actions).
+	exportSnapshots() {
+		const json = JSON.stringify(Object.fromEntries(this.snapshots))
+		this.setVariableValues({ snapshots_export: json })
+		this.log('info', `Snapshots export: ${json}`)
+		this.recordAction('Export snapshots')
 	}
 
-	handleError(error) {
-		if (error.code === 'ECONNREFUSED') {
-			return this.handleConnectionError()
-		} else {
-			this.log('error', error.message)
-			this.log('debug', error)
+	importSnapshots(json) {
+		let parsed
+		try {
+			parsed = JSON.parse(json)
+		} catch {
+			this.log('warn', 'Import snapshots: invalid JSON')
+			return
 		}
+		if (typeof parsed !== 'object' || parsed === null) {
+			this.log('warn', 'Import snapshots: expected a JSON object')
+			return
+		}
+		for (const [key, value] of Object.entries(parsed)) this.snapshots.set(key, value)
+		this.persist()
+		this.recordAction('Import snapshots')
+	}
+
+	// Step a named rundown: take out the current comp, take in the next (wraps).
+	async rundownStep(token, name, comps, direction) {
+		const conn = this.connections?.get(token)
+		if (!conn || !Array.isArray(comps) || comps.length === 0) return
+
+		const key = `${token}|${name || comps.join(',')}`
+		const step = Number(direction) || 1
+		const current = this.rundownState.get(key)
+		const next = current === undefined ? 0 : (((current + step) % comps.length) + comps.length) % comps.length
+
+		const entries = []
+		if (current !== undefined && comps[current] && comps[current] !== comps[next]) {
+			entries.push({ composition: comps[current], state: 'Out' })
+		}
+		entries.push({ composition: comps[next], state: 'In' })
+
+		const stateByComp = {}
+		for (const entry of entries) stateByComp[entry.composition] = entry.state
+
+		if (!(await conn.setStates(entries)).ok) {
+			this.log('warn', 'Rundown step failed')
+			return
+		}
+		this.rundownState.set(key, next)
+		this.recordCompStatesBatch(token, stateByComp)
+		this.persist()
+		this.recordAction(`Rundown → ${comps[next]}`)
+	}
+
+	// Take Out All across every connected app (panic).
+	takeOutAllApps() {
+		for (const [key, conn] of this.connections) {
+			conn.takeOutAllOutput()
+			this.recordAllOut(key)
+		}
+		this.recordAction('Take Out All — all apps')
 	}
 }
 

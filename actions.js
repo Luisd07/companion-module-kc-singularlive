@@ -8,6 +8,16 @@ function tokenField(apps) {
 	}
 }
 
+// Build an isVisible function safely — values are JSON-encoded so ids/names
+// containing quotes or apostrophes can't break the generated function.
+function isVisibleFor(token, extraField, extraValue) {
+	const parts = [`options.token == ${JSON.stringify(token)}`]
+	if (extraField !== undefined) {
+		parts.push(`options[${JSON.stringify(extraField)}] == ${JSON.stringify(extraValue)}`)
+	}
+	return new Function('options', `return ${parts.join(' && ')}`)
+}
+
 function perAppFields(apps, choicesByToken, choiceKey, label, idPrefix) {
 	return apps.map((app) => {
 		const choices = choicesByToken[app.id]?.[choiceKey] ?? []
@@ -17,7 +27,7 @@ function perAppFields(apps, choicesByToken, choiceKey, label, idPrefix) {
 			id: `${idPrefix}_${app.id}`,
 			choices,
 			default: choices?.[0]?.id,
-			isVisible: new Function('options', `return options.token == '${app.id}'`),
+			isVisible: isVisibleFor(app.id),
 		}
 	})
 }
@@ -28,6 +38,16 @@ export function getActions(apps, choicesByToken) {
 	const appLabel = (token) => apps.find((a) => a.id === token)?.label ?? token
 	const nodeName = (node) => (node ? node.split('&!&!&').join(' / ') : '')
 	const record = (description) => this.recordAction(description)
+	// Await a control call and report failure. Returns true only on success, so
+	// callers can skip recording optimistic state / undo when the call failed.
+	const send = async (promise, what) => {
+		const res = await promise
+		if (!res?.ok) {
+			this.log('warn', `${what} failed${res?.status ? ` (HTTP ${res.status})` : ''}`)
+			return false
+		}
+		return true
+	}
 
 	return {
 		animateIn: {
@@ -38,7 +58,7 @@ export function getActions(apps, choicesByToken) {
 				if (!conn) return
 				const comp = nodeFor(action.options, 'comp')
 				const undo = this.captureCompUndo(action.options.token, comp)
-				await conn.animateIn(comp)
+				if (!(await send(conn.animateIn(comp), `Take In: ${comp}`))) return
 				this.recordCompState(action.options.token, comp, 'In')
 				this.pushUndo(`Take In: ${comp}`, undo)
 				record(`Take In: ${comp}`)
@@ -52,7 +72,7 @@ export function getActions(apps, choicesByToken) {
 				if (!conn) return
 				const comp = nodeFor(action.options, 'comp')
 				const undo = this.captureCompUndo(action.options.token, comp)
-				await conn.animateOut(comp)
+				if (!(await send(conn.animateOut(comp), `Take Out: ${comp}`))) return
 				this.recordCompState(action.options.token, comp, 'Out')
 				this.clearAutoOut(action.options.token, comp)
 				this.pushUndo(`Take Out: ${comp}`, undo)
@@ -68,15 +88,11 @@ export function getActions(apps, choicesByToken) {
 				const comp = nodeFor(action.options, 'comp')
 				const undo = this.captureCompUndo(action.options.token, comp)
 				const isIn = this.compStates.get(`${action.options.token}|${comp}`) === 'In'
+				const call = isIn ? conn.animateOut(comp) : conn.animateIn(comp)
+				if (!(await send(call, `Toggle: ${comp}`))) return
 
-				if (isIn) {
-					await conn.animateOut(comp)
-					this.recordCompState(action.options.token, comp, 'Out')
-					this.clearAutoOut(action.options.token, comp)
-				} else {
-					await conn.animateIn(comp)
-					this.recordCompState(action.options.token, comp, 'In')
-				}
+				this.recordCompState(action.options.token, comp, isIn ? 'Out' : 'In')
+				if (isIn) this.clearAutoOut(action.options.token, comp)
 
 				this.pushUndo(`Toggle: ${comp}`, undo)
 				record(`Toggle ${isIn ? 'Out' : 'In'}: ${comp}`)
@@ -141,7 +157,7 @@ export function getActions(apps, choicesByToken) {
 						id: `controlnode_${app.id}`,
 						choices,
 						default: choices?.[0]?.id,
-						isVisible: new Function('options', `return options.token == '${app.id}'`),
+						isVisible: isVisibleFor(app.id),
 					}
 				}),
 				{
@@ -175,7 +191,7 @@ export function getActions(apps, choicesByToken) {
 				if (max !== undefined && !Number.isNaN(max)) next = Math.min(next, max)
 
 				const undo = this.captureNumberUndo(action.options.token, controlnode)
-				await conn.updateControlNode(controlnode, next)
+				if (!(await send(conn.updateControlNode(controlnode, next), `Adjust ${nodeName(controlnode)}`))) return
 				this.recordNumber(action.options.token, controlnode, next)
 				this.pushUndo(`Adjust ${nodeName(controlnode)} → ${next}`, undo)
 				record(`Adjust ${nodeName(controlnode)} → ${next}`)
@@ -267,7 +283,7 @@ export function getActions(apps, choicesByToken) {
 						id: `buttons_${app.id}`,
 						choices,
 						default: [],
-						isVisible: new Function('options', `return options.token == '${app.id}'`),
+						isVisible: isVisibleFor(app.id),
 					}
 				}),
 			],
@@ -346,7 +362,7 @@ export function getActions(apps, choicesByToken) {
 						choices,
 						default: choices?.[0]?.id,
 						allowCustom: false,
-						isVisible: new Function('options', `return options.token == '${app.id}'`),
+						isVisible: isVisibleFor(app.id),
 					}
 				}),
 
@@ -357,10 +373,7 @@ export function getActions(apps, choicesByToken) {
 						id: `${app.id}__${selection.id}`,
 						choices: selection.selections,
 						default: selection.selections?.[0]?.id,
-						isVisible: new Function(
-							'options',
-							`return options.token == '${app.id}' && options['controlnode_${app.id}'] == '${selection.id}'`,
-						),
+						isVisible: isVisibleFor(app.id, `controlnode_${app.id}`, selection.id),
 					})),
 				),
 			],
@@ -372,7 +385,7 @@ export function getActions(apps, choicesByToken) {
 				const value = action.options[`${action.options.token}__${controlnode}`]
 				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
 				const label = selection?.selections?.find((v) => v.id === value)?.label
-				await conn.updateControlNode(controlnode, value)
+				if (!(await send(conn.updateControlNode(controlnode, value), `Select ${nodeName(controlnode)}`))) return
 
 				// Keep the cycle index aligned so a later Cycle continues from here
 				// (e.g. a "reset to first value" button re-syncs the cycle position).
@@ -422,8 +435,9 @@ export function getActions(apps, choicesByToken) {
 				const base = this.cycleState.get(key) ?? start
 				const next = (((base + step) % len) + len) % len
 
+				if (!(await send(conn.updateControlNode(controlnode, values[next].id), `Cycle ${nodeName(controlnode)}`)))
+					return
 				this.cycleState.set(key, next)
-				await conn.updateControlNode(controlnode, values[next].id)
 				this.recordSelection(action.options.token, controlnode, values[next].id, values[next].label)
 				this.pushUndo(`Cycle ${nodeName(controlnode)} → ${values[next].label ?? values[next].id}`, undo)
 				record(`Cycle ${nodeName(controlnode)} → ${values[next].label ?? values[next].id}`)
@@ -500,7 +514,7 @@ export function getActions(apps, choicesByToken) {
 						id: `comps_${app.id}`,
 						choices,
 						default: [],
-						isVisible: new Function('options', `return options.token == '${app.id}'`),
+						isVisible: isVisibleFor(app.id),
 					}
 				}),
 				{
@@ -573,6 +587,278 @@ export function getActions(apps, choicesByToken) {
 			options: [],
 			callback: async () => {
 				await this.undoLast()
+			},
+		},
+		setNumberNode: {
+			name: 'Set Number Node (absolute)',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.numbers ?? []
+					return {
+						type: 'dropdown',
+						label: 'Number Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{ type: 'textinput', useVariables: true, label: 'Value', id: 'value', default: '0' },
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
+				if (!controlnode) return
+
+				const meta = (choicesByToken[action.options.token]?.numbers ?? []).find((n) => n.id === controlnode)
+				let next = Number(await this.parseVariablesInString(action.options.value))
+				if (Number.isNaN(next)) {
+					this.log('warn', 'Set Number: value is not a number')
+					return
+				}
+				const min = meta?.min === undefined || meta.min === null || meta.min === '' ? undefined : Number(meta.min)
+				const max = meta?.max === undefined || meta.max === null || meta.max === '' ? undefined : Number(meta.max)
+				if (min !== undefined && !Number.isNaN(min)) next = Math.max(next, min)
+				if (max !== undefined && !Number.isNaN(max)) next = Math.min(next, max)
+
+				const undo = this.captureNumberUndo(action.options.token, controlnode)
+				if (!(await send(conn.updateControlNode(controlnode, next), `Set ${nodeName(controlnode)}`))) return
+				this.recordNumber(action.options.token, controlnode, next)
+				this.pushUndo(`Set ${nodeName(controlnode)} = ${next}`, undo)
+				record(`Set ${nodeName(controlnode)} = ${next}`)
+			},
+		},
+		setSelectionValue: {
+			name: 'Set Selection by Value (variable-aware)',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.selections ?? []
+					return {
+						type: 'dropdown',
+						label: 'Selection Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						allowCustom: false,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'Value (selection id)',
+					id: 'value',
+					tooltip: 'The selection value id to set. Supports variables.',
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
+				if (!controlnode) return
+
+				const undo = this.captureSelUndo(action.options.token, controlnode)
+				const value = await this.parseVariablesInString(action.options.value)
+				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
+				const label = selection?.selections?.find((v) => v.id === value)?.label
+				if (!(await send(conn.updateControlNode(controlnode, value), `Set ${nodeName(controlnode)}`))) return
+
+				const idx = selection?.selections?.findIndex((v) => v.id === value) ?? -1
+				if (idx >= 0) this.cycleState.set(`${action.options.token}|${controlnode}`, idx)
+
+				this.recordSelection(action.options.token, controlnode, value, label)
+				this.pushUndo(`Set ${nodeName(controlnode)} = ${label ?? value}`, undo)
+				record(`Set ${nodeName(controlnode)} = ${label ?? value}`)
+			},
+		},
+		resetSelection: {
+			name: 'Reset Selection to Default',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.selections ?? []
+					return {
+						type: 'dropdown',
+						label: 'Selection Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						allowCustom: false,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
+				if (!controlnode) return
+
+				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
+				const value = selection?.default ?? selection?.selections?.[0]?.id
+				if (value === undefined) return
+				const label = selection?.selections?.find((v) => v.id === value)?.label
+
+				const undo = this.captureSelUndo(action.options.token, controlnode)
+				if (!(await send(conn.updateControlNode(controlnode, value), `Reset ${nodeName(controlnode)}`))) return
+
+				const idx = selection?.selections?.findIndex((v) => v.id === value) ?? -1
+				if (idx >= 0) this.cycleState.set(`${action.options.token}|${controlnode}`, idx)
+
+				this.recordSelection(action.options.token, controlnode, value, label)
+				this.pushUndo(`Reset ${nodeName(controlnode)}`, undo)
+				record(`Reset ${nodeName(controlnode)} = ${label ?? value}`)
+			},
+		},
+		countdownSetStart: {
+			name: 'Countdown: Set + Start',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.timers ?? []
+					return {
+						type: 'dropdown',
+						label: 'Timer node',
+						id: `timernode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.numbers ?? []
+					return {
+						type: 'dropdown',
+						label: 'Minutes node',
+						id: `minnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.numbers ?? []
+					return {
+						type: 'dropdown',
+						label: 'Seconds node',
+						id: `secnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{ type: 'number', label: 'Minutes', id: 'minutes', default: 5, min: 0, max: 999 },
+				{ type: 'number', label: 'Seconds', id: 'seconds', default: 0, min: 0, max: 59 },
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const timerNode = action.options[`timernode_${action.options.token}`]
+				if (!timerNode) return
+				const comp = timerNode.split('&!&!&')[0]
+				const minNode = action.options[`minnode_${action.options.token}`]
+				const secNode = action.options[`secnode_${action.options.token}`]
+
+				const payload = {}
+				if (minNode) payload[minNode.split('&!&!&')[1]] = Number(action.options.minutes)
+				if (secNode) payload[secNode.split('&!&!&')[1]] = Number(action.options.seconds)
+				payload[timerNode.split('&!&!&')[1]] = { command: 'play' }
+
+				if (!(await send(conn.updatePayload(comp, payload), 'Countdown set+start'))) return
+				record(`Countdown ${action.options.minutes}:${String(action.options.seconds).padStart(2, '0')} start`)
+			},
+		},
+		rundownStep: {
+			name: 'Rundown: Step',
+			options: [
+				tokenField(apps),
+				{ type: 'textinput', label: 'Rundown name', id: 'name', default: 'rundown1' },
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.compositions ?? []
+					return {
+						type: 'multidropdown',
+						label: 'Compositions (in order)',
+						id: `comps_${app.id}`,
+						choices,
+						default: [],
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{
+					type: 'dropdown',
+					label: 'Direction',
+					id: 'direction',
+					choices: [
+						{ id: '1', label: 'Next' },
+						{ id: '-1', label: 'Previous' },
+					],
+					default: '1',
+				},
+			],
+			callback: async (action) => {
+				const comps = action.options[`comps_${action.options.token}`] ?? []
+				await this.rundownStep(action.options.token, action.options.name, comps, action.options.direction)
+			},
+		},
+		takeOutAllApps: {
+			name: 'Take Out All — All Apps',
+			options: [],
+			callback: async () => {
+				this.takeOutAllApps()
+			},
+		},
+		reconnectControlApp: {
+			name: 'Reconnect Control App',
+			options: [
+				{
+					type: 'dropdown',
+					label: 'Control App',
+					id: 'token',
+					choices: [{ id: '', label: 'All apps' }, ...apps],
+					default: '',
+				},
+			],
+			callback: async (action) => {
+				await this.reconnectApp(action.options.token || undefined)
+			},
+		},
+		exportSnapshots: {
+			name: 'Export Snapshots (to variable + log)',
+			options: [],
+			callback: async () => {
+				this.exportSnapshots()
+			},
+		},
+		importSnapshots: {
+			name: 'Import Snapshots (from JSON)',
+			options: [{ type: 'textinput', useVariables: true, label: 'Snapshots JSON', id: 'json', default: '' }],
+			callback: async (action) => {
+				this.importSnapshots(await this.parseVariablesInString(action.options.json))
+			},
+		},
+		exportActivityLog: {
+			name: 'Export Activity Log (CSV)',
+			options: [
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'File path (blank = configured log file)',
+					id: 'file',
+					default: '',
+				},
+			],
+			callback: async (action) => {
+				this.exportActivityLog(await this.parseVariablesInString(action.options.file))
+			},
+		},
+		clearActivityLog: {
+			name: 'Clear Activity Log',
+			options: [],
+			callback: async () => {
+				this.clearActivityLog()
 			},
 		},
 	}
