@@ -1,0 +1,31 @@
+{
+	"name": "singularlive-studio",
+	"version": "2.1.2",
+	"main": "index.js",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bitfocus/companion-module-singularlive-studio.git"
+	},
+	"type": "module",
+	"scripts": {
+		"format": "prettier -w .",
+		"package": "companion-module-build",
+		"lint:raw": "eslint",
+		"lint": "yarn lint:raw ."
+	},
+	"dependencies": {
+		"@companion-module/base": "~1.11.3",
+		"eslint": "^9.26.0",
+		"node-fetch": "^3.3.2"
+	},
+	"devDependencies": {
+		"@companion-module/tools": "^2.6.1",
+		"prettier": "^3.4.2"
+	},
+	"engines": {
+		"node": "^22.12"
+	},
+	"prettier": "@companion-module/tools/.prettierrc.json",
+	"packageManager": "yarn@4.13.0"
+}

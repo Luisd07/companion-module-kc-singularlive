@@ -1,0 +1,30 @@
+{
+	"id": "singularlive-studio",
+	"name": "singularlive-studio",
+	"shortname": "singular",
+	"description": "Control Singular.Live Studio",
+	"version": "0.0.0",
+	"license": "MIT",
+	"repository": "git+https://github.com/bitfocus/companion-module-singularlive-studio.git",
+	"bugs": "https://github.com/bitfocus/companion-module-singularlive-studio/issues",
+	"maintainers": [
+		{
+			"name": "Fredrik Mediå",
+			"email": "fredrik.mediaa@gmail.com"
+		},
+		{
+			"name": "Bryce Seifert",
+			"email": "bryceapps@icloud.com"
+		}
+	],
+	"legacyIds": [],
+	"runtime": {
+		"type": "node22",
+		"api": "nodejs-ipc",
+		"apiVersion": "0.0.0",
+		"entrypoint": "../index.js"
+	},
+	"manufacturer": "Singular.Live",
+	"products": ["Studio"],
+	"keywords": ["Graphics"]
+}
