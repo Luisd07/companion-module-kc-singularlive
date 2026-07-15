@@ -15,7 +15,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | Version   | Theme                        | Headline features                       |
 | --------- | ---------------------------- | --------------------------------------- |
 | **0.1.0** | ✅ Multi-app foundation      | Multi-token support, all core actions   |
-| **0.2.0** | 📋 Payload & selection power | Batch payload update, Cycle selection   |
+| **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection   |
 | **0.3.0** | 📋 State sync                | Polling loop, Variables, core Feedbacks |
 | **0.4.0** | 📋 Timing                    | Timed auto-take-out + feedback          |
 | **0.5.0** | 📋 Show control              | Composition groups, Snapshots           |
@@ -26,10 +26,17 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 ## Payload
 
-| Feature                      | Version | Status | Notes                                                    |
-| ---------------------------- | ------- | ------ | -------------------------------------------------------- |
-| Update Payload Node (single) | 0.1.0   | ✅     | Currently "Update Control Node"                          |
-| Batch Update Payload Nodes   | 0.2.0   | ✅     | Multiple node/value pairs → one PATCH call (JSON object) |
+| Feature                      | Version | Status | Notes                                                              |
+| ---------------------------- | ------- | ------ | ------------------------------------------------------------------ |
+| Update Payload Node (single) | 0.1.0   | ✅     | Currently "Update Control Node"                                    |
+| Batch Update Payload Nodes   | 0.2.0   | ✅     | JSON object → one PATCH call. Kept as a niche manual-override tool |
+
+> Note: in this show most control nodes are driven by Singular data streams + the
+> composition's own JavaScript, so Companion's role is trigger-based (takes,
+> buttons, cycles) rather than setting values. Batch update is deliberately kept
+> JSON-only; the dropdown-rows expansion was dropped as not worth it here. The
+> `/model` endpoint only returns default/reset values, not live values, so
+> pre-filling current values isn't feasible from it.
 
 ## Selection Control Nodes
 
@@ -37,7 +44,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | --------------------------------------- | ------- | ------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | Update Selection Node (direct set)      | 0.1.0   | ✅     | `updateSelectionNode`                                                                                                            |
 | Update Color Node                       | 0.1.0   | ✅     | `updateColorNode`                                                                                                                |
-| Cycle Selection Node (next/prev, wraps) | 0.2.0   | 📋     | Rotate through ordered list; index tracked in-memory, persisted in 0.6.0. No if/else — modular arithmetic on the ordered choices |
+| Cycle Selection Node (next/prev, wraps) | 0.2.0   | ✅     | Rotate through ordered list; index tracked in-memory, persisted in 0.6.0. No if/else — modular arithmetic on the ordered choices |
 
 ## Timing
 

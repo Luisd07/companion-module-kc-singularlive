@@ -8,6 +8,9 @@ const MAX_APPS = 8
 class SingularInstance extends InstanceBase {
 	constructor(internal) {
 		super(internal)
+		// Tracks the current index per cycled selection node, keyed by
+		// `${token}|${controlnodeId}`. In-memory only (persisted in a later version).
+		this.cycleState = new Map()
 	}
 
 	async init(config) {
@@ -105,6 +108,9 @@ class SingularInstance extends InstanceBase {
 		const timers = []
 		const selections = []
 		const colors = []
+		// Per-composition list of simple key->value payload nodes, used to show a
+		// live "available node ids" hint in the batch payload action.
+		const payloadNodes = {}
 
 		for (let i = 0; i < elements.length; i++) {
 			if (!elements[i].name) continue
@@ -113,6 +119,7 @@ class SingularInstance extends InstanceBase {
 				id: elements[i].name,
 				label: elements[i].name,
 			})
+			payloadNodes[elements[i].name] = []
 
 			if (!elements[i].nodes) continue
 
@@ -146,6 +153,7 @@ class SingularInstance extends InstanceBase {
 					case 'textarea':
 					case 'image':
 						controlnodes.push(controlNode)
+						payloadNodes[elements[i].name].push({ id: node.id, title: nodeLabel })
 						break
 					case 'button':
 						buttons.push(controlNode)
@@ -170,11 +178,12 @@ class SingularInstance extends InstanceBase {
 						break
 					default:
 						controlnodes.push(controlNode)
+						payloadNodes[elements[i].name].push({ id: node.id, title: nodeLabel })
 				}
 			}
 		}
 
-		return { compositions, controlnodes, buttons, checkboxes, timers, selections, colors }
+		return { compositions, controlnodes, buttons, checkboxes, timers, selections, colors, payloadNodes }
 	}
 
 	async initSingularLive(config) {

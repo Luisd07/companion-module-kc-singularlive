@@ -28,7 +28,7 @@ export function getActions(apps, choicesByToken) {
 
 	return {
 		animateIn: {
-			name: 'Animate In',
+			name: 'Take In',
 			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp')],
 			callback: async (action) => {
 				const conn = connFor(action.options)
@@ -37,7 +37,7 @@ export function getActions(apps, choicesByToken) {
 			},
 		},
 		animateOut: {
-			name: 'Animate Out',
+			name: 'Take Out',
 			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp')],
 			callback: async (action) => {
 				const conn = connFor(action.options)
@@ -69,6 +69,29 @@ export function getActions(apps, choicesByToken) {
 			options: [
 				tokenField(apps),
 				...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp'),
+				{
+					type: 'static-text',
+					id: 'payloadinfo',
+					label: 'Format',
+					value:
+						'Enter a JSON object mapping node id to value, e.g. {"Name": "Home Team", "Score": "42"}. ' +
+						'Keep values in quotes. Values support variables. The node ids for the selected composition are listed below.',
+				},
+				// Live hint: the available node ids for the chosen app + composition.
+				...apps.flatMap((app) =>
+					Object.entries(choicesByToken[app.id]?.payloadNodes ?? {})
+						.filter(([, nodes]) => nodes.length)
+						.map(([composition, nodes], idx) => ({
+							type: 'static-text',
+							id: `payloadhint_${app.id}_${idx}`,
+							label: 'Node ids',
+							value: nodes.map((n) => (n.title && n.title !== n.id ? `${n.id} (${n.title})` : n.id)).join(', '),
+							isVisible: new Function(
+								'options',
+								`return options.token === ${JSON.stringify(app.id)} && options[${JSON.stringify(`comp_${app.id}`)}] === ${JSON.stringify(composition)}`,
+							),
+						})),
+				),
 				{
 					type: 'textinput',
 					useVariables: true,
@@ -196,6 +219,47 @@ export function getActions(apps, choicesByToken) {
 				if (!conn) return
 				const controlnode = nodeFor(action.options, 'controlnode')
 				await conn.updateControlNode(controlnode, action.options[`${action.options.token}__${controlnode}`])
+			},
+		},
+		cycleSelectionNode: {
+			name: 'Cycle Selection Node',
+			options: [
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'selections', 'Selection Node', 'controlnode'),
+				{
+					type: 'dropdown',
+					label: 'Direction',
+					id: 'direction',
+					choices: [
+						{ id: '1', label: 'Next' },
+						{ id: '-1', label: 'Previous' },
+					],
+					default: '1',
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+
+				const controlnode = nodeFor(action.options, 'controlnode')
+				if (!controlnode) return
+
+				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
+				const values = selection?.selections ?? []
+				const len = values.length
+				if (!len) return
+
+				// Advance the stored index by +1 (Next) or -1 (Previous), wrapping
+				// with modular arithmetic. First press starts at the first value for
+				// Next and the last value for Previous.
+				const step = Number(action.options.direction)
+				const key = `${action.options.token}|${controlnode}`
+				const start = step > 0 ? -1 : 0
+				const base = this.cycleState.get(key) ?? start
+				const next = (((base + step) % len) + len) % len
+
+				this.cycleState.set(key, next)
+				await conn.updateControlNode(controlnode, values[next].id)
 			},
 		},
 		updateColorNode: {
