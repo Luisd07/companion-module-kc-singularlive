@@ -11,6 +11,7 @@ const sanitize = (s) => String(s).replace(/[^a-zA-Z0-9]+/g, '_')
 const compStateVarId = (appKey, comp) => `comp_${appKey}_${sanitize(comp)}_state`
 const selValueVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}`
 const selLabelVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}_label`
+const numValueVarId = (appKey, node) => `num_${appKey}_${sanitize(node)}`
 
 const UNDO_DEPTH = 10
 
@@ -32,6 +33,8 @@ class SingularInstance extends InstanceBase {
 		this.selValues = new Map()
 		// Human-readable label of the value Companion last set (same key as selValues).
 		this.selLabels = new Map()
+		// Number-node values Companion last set, keyed by `${token}|${controlnodeId}`.
+		this.numValues = new Map()
 		// Pending auto-take-out timers, keyed by `${token}|${compName}`.
 		this.autoOutTimers = new Map()
 		// Saved scene snapshots, keyed by `${token}|${name}`.
@@ -146,6 +149,7 @@ class SingularInstance extends InstanceBase {
 			cycleState: Object.fromEntries(this.cycleState),
 			selValues: Object.fromEntries(this.selValues),
 			selLabels: Object.fromEntries(this.selLabels),
+			numValues: Object.fromEntries(this.numValues),
 			snapshots: Object.fromEntries(this.snapshots),
 		}
 	}
@@ -159,6 +163,7 @@ class SingularInstance extends InstanceBase {
 			this.cycleState = new Map(Object.entries(state.cycleState ?? {}))
 			this.selValues = new Map(Object.entries(state.selValues ?? {}))
 			this.selLabels = new Map(Object.entries(state.selLabels ?? {}))
+			this.numValues = new Map(Object.entries(state.numValues ?? {}))
 			this.snapshots = new Map(Object.entries(state.snapshots ?? {}))
 		} catch {
 			this.log('warn', 'Could not parse persisted state; starting fresh')
@@ -205,6 +210,7 @@ class SingularInstance extends InstanceBase {
 		const timers = []
 		const selections = []
 		const colors = []
+		const numbers = []
 		// Per-composition list of simple key->value payload nodes, used to show a
 		// live "available node ids" hint in the batch payload action.
 		const payloadNodes = {}
@@ -245,8 +251,16 @@ class SingularInstance extends InstanceBase {
 				}
 
 				switch (node.type) {
-					case 'text':
 					case 'number':
+						numbers.push({
+							id: controlNode.id,
+							label: controlNode.label,
+							default: node.defaultValue,
+							min: node.min,
+							max: node.max,
+						})
+					// falls through — a number node is also a plain control/payload node
+					case 'text':
 					case 'textarea':
 					case 'image':
 						controlnodes.push(controlNode)
@@ -280,7 +294,7 @@ class SingularInstance extends InstanceBase {
 			}
 		}
 
-		return { compositions, controlnodes, buttons, checkboxes, timers, selections, colors, payloadNodes }
+		return { compositions, controlnodes, buttons, checkboxes, timers, selections, colors, numbers, payloadNodes }
 	}
 
 	async initSingularLive(config) {
@@ -354,6 +368,9 @@ class SingularInstance extends InstanceBase {
 				defs.push({ variableId: selValueVarId(app.id, sel.id), name: `${app.label} / ${sel.label} — value (last set)` })
 				defs.push({ variableId: selLabelVarId(app.id, sel.id), name: `${app.label} / ${sel.label} — label (last set)` })
 			}
+			for (const num of choices.numbers) {
+				defs.push({ variableId: numValueVarId(app.id, num.id), name: `${app.label} / ${num.label} — value (last set)` })
+			}
 		}
 
 		return defs
@@ -373,6 +390,9 @@ class SingularInstance extends InstanceBase {
 			for (const sel of choices.selections) {
 				values[selValueVarId(app.id, sel.id)] = this.selValues.get(`${app.id}|${sel.id}`) ?? ''
 				values[selLabelVarId(app.id, sel.id)] = this.selLabels.get(`${app.id}|${sel.id}`) ?? ''
+			}
+			for (const num of choices.numbers) {
+				values[numValueVarId(app.id, num.id)] = this.numValues.get(`${app.id}|${num.id}`) ?? ''
 			}
 		}
 
@@ -409,6 +429,24 @@ class SingularInstance extends InstanceBase {
 		this.setVariableValues(values)
 		this.checkFeedbacks('selectionActiveValue')
 		this.persist()
+	}
+
+	recordNumber(token, controlnode, value) {
+		if (!token || !controlnode) return
+
+		this.numValues.set(`${token}|${controlnode}`, value)
+		this.setVariableValues({ [numValueVarId(token, controlnode)]: value })
+		this.persist()
+	}
+
+	captureNumberUndo(token, controlnode) {
+		const before = this.numValues.get(`${token}|${controlnode}`)
+		return () => {
+			if (before === undefined) return
+			const conn = this.connections?.get(token)
+			if (conn) conn.updateControlNode(controlnode, before)
+			this.recordNumber(token, controlnode, before)
+		}
 	}
 
 	recordAction(description) {

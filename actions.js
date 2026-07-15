@@ -59,6 +59,29 @@ export function getActions(apps, choicesByToken) {
 				record(`Take Out: ${comp}`)
 			},
 		},
+		toggleComposition: {
+			name: 'Toggle Take In/Out',
+			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp')],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const comp = nodeFor(action.options, 'comp')
+				const undo = this.captureCompUndo(action.options.token, comp)
+				const isIn = this.compStates.get(`${action.options.token}|${comp}`) === 'In'
+
+				if (isIn) {
+					await conn.animateOut(comp)
+					this.recordCompState(action.options.token, comp, 'Out')
+					this.clearAutoOut(action.options.token, comp)
+				} else {
+					await conn.animateIn(comp)
+					this.recordCompState(action.options.token, comp, 'In')
+				}
+
+				this.pushUndo(`Toggle: ${comp}`, undo)
+				record(`Toggle ${isIn ? 'Out' : 'In'}: ${comp}`)
+			},
+		},
 		takeInTimed: {
 			name: 'Take In (Timed Auto Take-Out)',
 			options: [
@@ -104,6 +127,58 @@ export function getActions(apps, choicesByToken) {
 				let parsedValue = await this.parseVariablesInString(action.options.value)
 				await conn.updateControlNode(controlnode, parsedValue)
 				record(`Set ${nodeName(controlnode)} = ${parsedValue}`)
+			},
+		},
+		adjustNumberNode: {
+			name: 'Adjust Number Node (±)',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.numbers ?? []
+					return {
+						type: 'dropdown',
+						label: 'Number Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: new Function('options', `return options.token == '${app.id}'`),
+					}
+				}),
+				{
+					type: 'number',
+					label: 'Step (negative to decrease)',
+					id: 'step',
+					default: 1,
+					min: -1000000,
+					max: 1000000,
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
+				if (!controlnode) return
+
+				const meta = (choicesByToken[action.options.token]?.numbers ?? []).find((n) => n.id === controlnode)
+				const key = `${action.options.token}|${controlnode}`
+
+				let base = Number(this.numValues.get(key))
+				if (Number.isNaN(base)) base = Number(meta?.default)
+				if (Number.isNaN(base)) base = 0
+
+				let next = base + Number(action.options.step)
+				next = Math.round(next * 1e6) / 1e6 // avoid float noise
+
+				const min = meta?.min === undefined || meta.min === null || meta.min === '' ? undefined : Number(meta.min)
+				const max = meta?.max === undefined || meta.max === null || meta.max === '' ? undefined : Number(meta.max)
+				if (min !== undefined && !Number.isNaN(min)) next = Math.max(next, min)
+				if (max !== undefined && !Number.isNaN(max)) next = Math.min(next, max)
+
+				const undo = this.captureNumberUndo(action.options.token, controlnode)
+				await conn.updateControlNode(controlnode, next)
+				this.recordNumber(action.options.token, controlnode, next)
+				this.pushUndo(`Adjust ${nodeName(controlnode)} → ${next}`, undo)
+				record(`Adjust ${nodeName(controlnode)} → ${next}`)
 			},
 		},
 		batchUpdatePayload: {
@@ -178,6 +253,31 @@ export function getActions(apps, choicesByToken) {
 				const controlnode = nodeFor(action.options, 'controlnode')
 				await conn.updateButtonNode(controlnode)
 				record(`Button: ${nodeName(controlnode)}`)
+			},
+		},
+		triggerButtonGroup: {
+			name: 'Trigger Button Group',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.buttons ?? []
+					return {
+						type: 'multidropdown',
+						label: 'Buttons',
+						id: `buttons_${app.id}`,
+						choices,
+						default: [],
+						isVisible: new Function('options', `return options.token == '${app.id}'`),
+					}
+				}),
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const nodes = action.options[`buttons_${action.options.token}`] ?? []
+				if (!nodes.length) return
+				conn.pressButtons(nodes)
+				record(`Button group: ${nodes.length} buttons`)
 			},
 		},
 		updateCheckboxNode: {

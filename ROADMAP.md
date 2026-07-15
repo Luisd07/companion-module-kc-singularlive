@@ -12,15 +12,18 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 ## Release overview
 
-| Version   | Theme                        | Headline features                       |
-| --------- | ---------------------------- | --------------------------------------- |
-| **0.1.0** | ✅ Multi-app foundation      | Multi-token support, all core actions   |
-| **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection   |
-| **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks |
-| **0.4.0** | ✅ Timing                    | Timed auto-take-out + feedback          |
-| **0.5.0** | ✅ Show control              | Composition groups, Snapshots           |
-| **0.6.0** | ✅ History & persistence     | Undo, state persistence across restarts |
-| **1.0.0** | 📋 Hardening                 | Error handling, presets, docs, cleanup  |
+| Version   | Theme                        | Headline features                        |
+| --------- | ---------------------------- | ---------------------------------------- |
+| **0.1.0** | ✅ Multi-app foundation      | Multi-token support, all core actions    |
+| **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection    |
+| **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks  |
+| **0.4.0** | ✅ Timing                    | Timed auto-take-out + feedback           |
+| **0.5.0** | ✅ Show control              | Composition groups, Snapshots            |
+| **0.6.0** | ✅ History & persistence     | Undo, state persistence across restarts  |
+| **0.7.0** | ✅ Operator convenience      | Toggle take, button group, number ±step  |
+| **0.8.0** | 📋 Integration               | Incoming HTTP trigger for external tools |
+| **0.9.0** | 📋 Post-show                 | Session activity log, CSV export         |
+| **1.0.0** | 📋 Hardening                 | Error handling, presets, docs, cleanup   |
 
 ---
 
@@ -61,6 +64,14 @@ capability area. `1.0.0` is the first hardened, documented release.
 | Recall Snapshot           | 0.5.0   | ✅     | Restore comp states + optionally selection values, re-fired to Singular           |
 | Undo Last Action          | 0.6.0   | ✅     | Reverses last take / timed / group / selection / cycle; 10-deep in-memory history |
 
+## Operator convenience
+
+| Feature                | Version | Status | Notes                                                                 |
+| ---------------------- | ------- | ------ | --------------------------------------------------------------------- |
+| Toggle Take In/Out     | 0.7.0   | ✅     | One action toggles a comp using tracked on-air state; undoable        |
+| Trigger Button Group   | 0.7.0   | ✅     | Fire several button nodes in one PATCH (e.g. data-refresh buttons)    |
+| Adjust Number Node (±) | 0.7.0   | ✅     | Bump a number node by a step, clamped to the node's min/max; undoable |
+
 ## Feedbacks
 
 _Depends on the polling loop (0.3.0)._
@@ -91,6 +102,20 @@ _Depends on the polling loop (0.3.0)._
 | Control-call error handling                       | 1.0.0   | 📋     | `api.js` PATCH/POST currently fire-and-forget — await responses, surface failures |
 | Presets                                           | 1.0.0   | 📋     | Drag-and-drop buttons for common actions                                          |
 | Remove dead `handleError`/`handleConnectionError` | 1.0.0   | 📋     | Orphaned since the legacy `action()` wrapper was removed                          |
+
+## Integration
+
+| Feature                            | Version   | Status | Notes                                                                                                                                                            |
+| ---------------------------------- | --------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable interpolation in payloads | 0.1–0.2.0 | ✅     | Payload values resolve Companion variables at fire time (`updateControlNode` + batch payload)                                                                    |
+| Incoming HTTP trigger              | 0.8.0     | 📋     | localhost-only HTTP server, token-auth, routes to module actions so Companion state stays in sync. Open decisions: generic action-runner vs fixed REST endpoints |
+| Variables in selection/number set  | 0.8.0     | 📋     | Optional: let selection/number actions target a value from a variable (only payload actions do today)                                                            |
+
+## Post-show
+
+| Feature                    | Version | Status | Notes                                                                                                                                                                   |
+| -------------------------- | ------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session activity log (CSV) | 0.9.0   | 📋     | Timestamped ring buffer of every fired action, exportable as CSV. Open decision: file path vs HTTP download vs both. Useful for post-show review / sponsor verification |
 
 ---
 
