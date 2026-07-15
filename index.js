@@ -27,6 +27,8 @@ class SingularInstance extends InstanceBase {
 		this.selLabels = new Map()
 		// Pending auto-take-out timers, keyed by `${token}|${compName}`.
 		this.autoOutTimers = new Map()
+		// Saved scene snapshots, keyed by `${token}|${name}`. In-memory (persisted later).
+		this.snapshots = new Map()
 		this.lastAction = ''
 		this.pollTimer = null
 	}
@@ -420,6 +422,63 @@ class SingularInstance extends InstanceBase {
 		for (const id of this.autoOutTimers.values()) clearTimeout(id)
 		this.autoOutTimers.clear()
 		this.checkFeedbacks('timedTakeOutActive')
+	}
+
+	// Update several compositions' tracked states at once, then refresh variables
+	// and feedbacks a single time (used by groups and snapshot recall).
+	recordCompStatesBatch(token, stateByComp) {
+		const values = {}
+		for (const [comp, state] of Object.entries(stateByComp)) {
+			this.compStates.set(`${token}|${comp}`, state)
+			values[compStateVarId(token, comp)] = state
+		}
+		this.setVariableValues(values)
+		this.checkFeedbacks('compositionIsIn')
+	}
+
+	// Capture the current on-air states and Companion-set selection values for an
+	// app under a named snapshot.
+	saveSnapshot(token, name) {
+		const choices = this.choicesByToken?.[token]
+		if (!token || !name || !choices) return
+
+		const comps = {}
+		for (const comp of choices.compositions) {
+			comps[comp.id] = this.compStates.get(`${token}|${comp.id}`) ?? 'Out'
+		}
+
+		const sels = {}
+		for (const sel of choices.selections) {
+			const key = `${token}|${sel.id}`
+			if (this.selValues.has(key)) {
+				sels[sel.id] = { value: this.selValues.get(key), label: this.selLabels.get(key) }
+			}
+		}
+
+		this.snapshots.set(`${token}|${name}`, { comps, sels })
+		this.recordAction(`Save snapshot: ${name}`)
+	}
+
+	async recallSnapshot(token, name, restoreSelections) {
+		const conn = this.connections?.get(token)
+		const snapshot = this.snapshots.get(`${token}|${name}`)
+		if (!conn || !snapshot) {
+			this.log('warn', `Snapshot "${name}" not found for the selected app`)
+			return
+		}
+
+		const entries = Object.entries(snapshot.comps).map(([composition, state]) => ({ composition, state }))
+		conn.setStates(entries)
+		this.recordCompStatesBatch(token, snapshot.comps)
+
+		if (restoreSelections) {
+			for (const [node, saved] of Object.entries(snapshot.sels)) {
+				conn.updateControlNode(node, saved.value)
+				this.recordSelection(token, node, saved.value, saved.label)
+			}
+		}
+
+		this.recordAction(`Recall snapshot: ${name}`)
 	}
 
 	startPolling() {

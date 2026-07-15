@@ -18,7 +18,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection   |
 | **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks |
 | **0.4.0** | ✅ Timing                    | Timed auto-take-out + feedback          |
-| **0.5.0** | 📋 Show control              | Composition groups, Snapshots           |
+| **0.5.0** | ✅ Show control              | Composition groups, Snapshots           |
 | **0.6.0** | 📋 History & persistence     | Undo, state persistence across restarts |
 | **1.0.0** | 📋 Hardening                 | Error handling, presets, docs, cleanup  |
 
@@ -56,9 +56,9 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 | Feature                   | Version | Status | Notes                                                                               |
 | ------------------------- | ------- | ------ | ----------------------------------------------------------------------------------- |
-| Trigger Composition Group | 0.5.0   | 📋     | Named set of comps, fired concurrently (in or out)                                  |
-| Save Snapshot             | 0.5.0   | 📋     | Capture current comp/selection state                                                |
-| Recall Snapshot           | 0.5.0   | 📋     | Restore snapshot, optional re-fire to Singular                                      |
+| Trigger Composition Group | 0.5.0   | ✅     | Inline multi-select of comps, fired together in one PATCH (in or out)               |
+| Save Snapshot             | 0.5.0   | ✅     | Capture comp on-air states + Companion-set selection values (named, in-memory)      |
+| Recall Snapshot           | 0.5.0   | ✅     | Restore comp states + optionally selection values, re-fired to Singular             |
 | Undo Last Action          | 0.6.0   | 📋     | Reverse last take / selection change; 10-deep history. Depends on state persistence |
 
 ## Feedbacks

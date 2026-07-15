@@ -375,5 +375,83 @@ export function getActions(apps, choicesByToken) {
 				record(`Refresh: ${appLabel(action.options.token)}`)
 			},
 		},
+		triggerCompositionGroup: {
+			name: 'Trigger Composition Group',
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.compositions ?? []
+					return {
+						type: 'multidropdown',
+						label: 'Compositions',
+						id: `comps_${app.id}`,
+						choices,
+						default: [],
+						isVisible: new Function('options', `return options.token == '${app.id}'`),
+					}
+				}),
+				{
+					type: 'dropdown',
+					label: 'Action',
+					id: 'state',
+					choices: [
+						{ id: 'In', label: 'Take In' },
+						{ id: 'Out', label: 'Take Out' },
+					],
+					default: 'In',
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				const comps = action.options[`comps_${action.options.token}`] ?? []
+				if (!comps.length) return
+
+				const state = action.options.state
+				conn.setStates(comps.map((composition) => ({ composition, state })))
+
+				const stateByComp = {}
+				for (const comp of comps) stateByComp[comp] = state
+				this.recordCompStatesBatch(action.options.token, stateByComp)
+
+				record(`Group ${state === 'In' ? 'Take In' : 'Take Out'}: ${comps.length} comps`)
+			},
+		},
+		saveSnapshot: {
+			name: 'Save Snapshot',
+			options: [
+				tokenField(apps),
+				{
+					type: 'textinput',
+					label: 'Snapshot name',
+					id: 'name',
+					default: 'snapshot1',
+				},
+			],
+			callback: async (action) => {
+				this.saveSnapshot(action.options.token, action.options.name)
+			},
+		},
+		recallSnapshot: {
+			name: 'Recall Snapshot',
+			options: [
+				tokenField(apps),
+				{
+					type: 'textinput',
+					label: 'Snapshot name',
+					id: 'name',
+					default: 'snapshot1',
+				},
+				{
+					type: 'checkbox',
+					label: 'Also restore selection values',
+					id: 'restoreSelections',
+					default: true,
+				},
+			],
+			callback: async (action) => {
+				await this.recallSnapshot(action.options.token, action.options.name, action.options.restoreSelections)
+			},
+		},
 	}
 }
