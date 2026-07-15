@@ -17,7 +17,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | **0.1.0** | ✅ Multi-app foundation      | Multi-token support, all core actions   |
 | **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection   |
 | **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks |
-| **0.4.0** | 📋 Timing                    | Timed auto-take-out + feedback          |
+| **0.4.0** | ✅ Timing                    | Timed auto-take-out + feedback          |
 | **0.5.0** | 📋 Show control              | Composition groups, Snapshots           |
 | **0.6.0** | 📋 History & persistence     | Undo, state persistence across restarts |
 | **1.0.0** | 📋 Hardening                 | Error handling, presets, docs, cleanup  |
@@ -50,7 +50,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 | Feature                        | Version | Status | Notes                                                                                |
 | ------------------------------ | ------- | ------ | ------------------------------------------------------------------------------------ |
-| Take In w/ Timed Auto-Take-Out | 0.4.0   | 📋     | Take In, then auto Take Out after N seconds; re-trigger cancels & restarts the timer |
+| Take In w/ Timed Auto-Take-Out | 0.4.0   | ✅     | Take In, then auto Take Out after N seconds; re-trigger cancels & restarts the timer |
 
 ## Show Control
 
@@ -69,7 +69,7 @@ _Depends on the polling loop (0.3.0)._
 | ---------------------------------- | ------- | ------ | ------------------------------------------------------------------------------- |
 | Composition: Is In                 | 0.3.0   | ✅     | Button reflects on-air state (from polling)                                     |
 | Selection Node: Is Active Value    | 0.3.0   | ✅     | Lit when Companion's last-set value == chosen (not authoritative vs streams/JS) |
-| Composition: Timed Take-Out Active | 0.4.0   | 📋     | Ships with the timed auto-take-out feature                                      |
+| Composition: Timed Take-Out Active | 0.4.0   | ✅     | Ships with the timed auto-take-out feature                                      |
 
 ## Variables
 

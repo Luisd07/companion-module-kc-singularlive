@@ -51,7 +51,29 @@ export function getActions(apps, choicesByToken) {
 				const comp = nodeFor(action.options, 'comp')
 				await conn.animateOut(comp)
 				this.recordCompState(action.options.token, comp, 'Out')
+				this.clearAutoOut(action.options.token, comp)
 				record(`Take Out: ${comp}`)
+			},
+		},
+		takeInTimed: {
+			name: 'Take In (Timed Auto Take-Out)',
+			options: [
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp'),
+				{
+					type: 'number',
+					label: 'Auto Take-Out after (seconds, 0 = off)',
+					id: 'seconds',
+					min: 0,
+					max: 3600,
+					default: 10,
+				},
+			],
+			callback: async (action) => {
+				if (!connFor(action.options)) return
+				const comp = nodeFor(action.options, 'comp')
+				await this.takeInWithTimeout(action.options.token, comp, action.options.seconds)
+				record(`Take In (auto-out ${action.options.seconds}s): ${comp}`)
 			},
 		},
 		updateControlNode: {

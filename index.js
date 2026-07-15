@@ -25,6 +25,8 @@ class SingularInstance extends InstanceBase {
 		this.selValues = new Map()
 		// Human-readable label of the value Companion last set (same key as selValues).
 		this.selLabels = new Map()
+		// Pending auto-take-out timers, keyed by `${token}|${compName}`.
+		this.autoOutTimers = new Map()
 		this.lastAction = ''
 		this.pollTimer = null
 	}
@@ -38,6 +40,7 @@ class SingularInstance extends InstanceBase {
 
 	async destroy() {
 		this.stopPolling()
+		this.clearAllAutoOut()
 		this.connections = new Map()
 		this.compStates = new Map()
 		this.log('debug', 'Singular module destroyed')
@@ -219,6 +222,7 @@ class SingularInstance extends InstanceBase {
 
 	async initSingularLive(config) {
 		this.stopPolling()
+		this.clearAllAutoOut()
 		this.connections = new Map()
 
 		const apps = this.parseApps(config)
@@ -351,7 +355,8 @@ class SingularInstance extends InstanceBase {
 		this.checkFeedbacks('compositionIsIn')
 	}
 
-	// Take Out All clears every composition in the app — reflect that at once.
+	// Take Out All clears every composition in the app — reflect that at once,
+	// and cancel any pending auto-take-out timers for the app.
 	recordAllOut(token) {
 		const comps = this.choicesByToken?.[token]?.compositions ?? []
 		const values = {}
@@ -361,6 +366,60 @@ class SingularInstance extends InstanceBase {
 		}
 		this.setVariableValues(values)
 		this.checkFeedbacks('compositionIsIn')
+
+		const prefix = `${token}|`
+		const keys = [...this.autoOutTimers.keys()].filter((key) => key.startsWith(prefix))
+		for (const key of keys) {
+			this.clearAutoOut(token, key.slice(prefix.length))
+		}
+	}
+
+	// Take In a composition, then auto Take Out after `seconds`. Re-triggering
+	// the same composition cancels the pending take-out and restarts the timer.
+	async takeInWithTimeout(token, comp, seconds) {
+		const conn = this.connections?.get(token)
+		if (!conn || !comp) return
+
+		await conn.animateIn(comp)
+		this.recordCompState(token, comp, 'In')
+		this.scheduleAutoOut(token, comp, seconds)
+	}
+
+	scheduleAutoOut(token, comp, seconds) {
+		this.clearAutoOut(token, comp)
+
+		const secs = Math.max(0, Number(seconds) || 0)
+		if (secs <= 0) return
+
+		const key = `${token}|${comp}`
+		const id = setTimeout(() => {
+			this.autoOutTimers.delete(key)
+			const conn = this.connections?.get(token)
+			if (conn) {
+				conn.animateOut(comp)
+				this.recordCompState(token, comp, 'Out')
+			}
+			this.checkFeedbacks('timedTakeOutActive')
+		}, secs * 1000)
+
+		this.autoOutTimers.set(key, id)
+		this.checkFeedbacks('timedTakeOutActive')
+	}
+
+	clearAutoOut(token, comp) {
+		const key = `${token}|${comp}`
+		const id = this.autoOutTimers.get(key)
+		if (id) {
+			clearTimeout(id)
+			this.autoOutTimers.delete(key)
+			this.checkFeedbacks('timedTakeOutActive')
+		}
+	}
+
+	clearAllAutoOut() {
+		for (const id of this.autoOutTimers.values()) clearTimeout(id)
+		this.autoOutTimers.clear()
+		this.checkFeedbacks('timedTakeOutActive')
 	}
 
 	startPolling() {
