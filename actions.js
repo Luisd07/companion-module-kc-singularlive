@@ -25,6 +25,9 @@ function perAppFields(apps, choicesByToken, choiceKey, label, idPrefix) {
 export function getActions(apps, choicesByToken) {
 	const connFor = (options) => this.connections?.get(options.token)
 	const nodeFor = (options, idPrefix) => options[`${idPrefix}_${options.token}`]
+	const appLabel = (token) => apps.find((a) => a.id === token)?.label ?? token
+	const nodeName = (node) => (node ? node.split('&!&!&').join(' / ') : '')
+	const record = (description) => this.recordAction(description)
 
 	return {
 		animateIn: {
@@ -33,7 +36,10 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
-				await conn.animateIn(nodeFor(action.options, 'comp'))
+				const comp = nodeFor(action.options, 'comp')
+				await conn.animateIn(comp)
+				this.recordCompState(action.options.token, comp, 'In')
+				record(`Take In: ${comp}`)
 			},
 		},
 		animateOut: {
@@ -42,7 +48,10 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
-				await conn.animateOut(nodeFor(action.options, 'comp'))
+				const comp = nodeFor(action.options, 'comp')
+				await conn.animateOut(comp)
+				this.recordCompState(action.options.token, comp, 'Out')
+				record(`Take Out: ${comp}`)
 			},
 		},
 		updateControlNode: {
@@ -60,8 +69,10 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
 				let parsedValue = await this.parseVariablesInString(action.options.value)
-				await conn.updateControlNode(nodeFor(action.options, 'controlnode'), parsedValue)
+				await conn.updateControlNode(controlnode, parsedValue)
+				record(`Set ${nodeName(controlnode)} = ${parsedValue}`)
 			},
 		},
 		batchUpdatePayload: {
@@ -122,7 +133,9 @@ export function getActions(apps, choicesByToken) {
 					return
 				}
 
-				await conn.updatePayload(nodeFor(action.options, 'comp'), payload)
+				const comp = nodeFor(action.options, 'comp')
+				await conn.updatePayload(comp, payload)
+				record(`Batch update: ${comp}`)
 			},
 		},
 		updateButtonNode: {
@@ -131,7 +144,9 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
-				await conn.updateButtonNode(nodeFor(action.options, 'controlnode'))
+				const controlnode = nodeFor(action.options, 'controlnode')
+				await conn.updateButtonNode(controlnode)
+				record(`Button: ${nodeName(controlnode)}`)
 			},
 		},
 		updateCheckboxNode: {
@@ -148,7 +163,9 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
-				await conn.updateCheckboxNode(nodeFor(action.options, 'controlnode'), action.options.value)
+				const controlnode = nodeFor(action.options, 'controlnode')
+				await conn.updateCheckboxNode(controlnode, action.options.value)
+				record(`Set ${nodeName(controlnode)} = ${action.options.value}`)
 			},
 		},
 		updateTimerNode: {
@@ -180,7 +197,9 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				const conn = connFor(action.options)
 				if (!conn) return
-				await conn.updateTimer(nodeFor(action.options, 'controlnode'), action.options.value)
+				const controlnode = nodeFor(action.options, 'controlnode')
+				await conn.updateTimer(controlnode, action.options.value)
+				record(`Timer ${nodeName(controlnode)}: ${action.options.value}`)
 			},
 		},
 		updateSelectionNode: {
@@ -218,7 +237,18 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				const controlnode = nodeFor(action.options, 'controlnode')
-				await conn.updateControlNode(controlnode, action.options[`${action.options.token}__${controlnode}`])
+				const value = action.options[`${action.options.token}__${controlnode}`]
+				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
+				const label = selection?.selections?.find((v) => v.id === value)?.label
+				await conn.updateControlNode(controlnode, value)
+
+				// Keep the cycle index aligned so a later Cycle continues from here
+				// (e.g. a "reset to first value" button re-syncs the cycle position).
+				const idx = selection?.selections?.findIndex((v) => v.id === value) ?? -1
+				if (idx >= 0) this.cycleState.set(`${action.options.token}|${controlnode}`, idx)
+
+				this.recordSelection(action.options.token, controlnode, value, label)
+				record(`Select ${nodeName(controlnode)} = ${label ?? value}`)
 			},
 		},
 		cycleSelectionNode: {
@@ -260,6 +290,8 @@ export function getActions(apps, choicesByToken) {
 
 				this.cycleState.set(key, next)
 				await conn.updateControlNode(controlnode, values[next].id)
+				this.recordSelection(action.options.token, controlnode, values[next].id, values[next].label)
+				record(`Cycle ${nodeName(controlnode)} → ${values[next].label ?? values[next].id}`)
 			},
 		},
 		updateColorNode: {
@@ -294,7 +326,9 @@ export function getActions(apps, choicesByToken) {
 						b: colorArray[2],
 						a: colorArray[3],
 					}
-					await conn.updateColorNode(nodeFor(action.options, 'controlnode'), colorData)
+					const controlnode = nodeFor(action.options, 'controlnode')
+					await conn.updateColorNode(controlnode, colorData)
+					record(`Set color ${nodeName(controlnode)}`)
 				}
 			},
 		},
@@ -305,6 +339,8 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				await conn.takeOutAllOutput()
+				this.recordAllOut(action.options.token)
+				record(`Take Out All: ${appLabel(action.options.token)}`)
 			},
 		},
 		refreshComposition: {
@@ -314,6 +350,7 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				await conn.refreshComposition()
+				record(`Refresh: ${appLabel(action.options.token)}`)
 			},
 		},
 	}

@@ -1,9 +1,16 @@
 import { InstanceBase, runEntrypoint } from '@companion-module/base'
 
 import { getActions } from './actions.js'
+import { getFeedbacks } from './feedbacks.js'
 import api from './lib/api.js'
 
 const MAX_APPS = 8
+
+// Variable id helpers — shared with value updates so definitions and values agree.
+const sanitize = (s) => String(s).replace(/[^a-zA-Z0-9]+/g, '_')
+const compStateVarId = (appKey, comp) => `comp_${appKey}_${sanitize(comp)}_state`
+const selValueVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}`
+const selLabelVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}_label`
 
 class SingularInstance extends InstanceBase {
 	constructor(internal) {
@@ -11,6 +18,15 @@ class SingularInstance extends InstanceBase {
 		// Tracks the current index per cycled selection node, keyed by
 		// `${token}|${controlnodeId}`. In-memory only (persisted in a later version).
 		this.cycleState = new Map()
+		// Composition on-air states from polling, keyed by `${token}|${compName}`.
+		this.compStates = new Map()
+		// Values Companion last set per selection node, keyed by `${token}|${controlnodeId}`.
+		// Not authoritative — data streams / composition JS can change the real value.
+		this.selValues = new Map()
+		// Human-readable label of the value Companion last set (same key as selValues).
+		this.selLabels = new Map()
+		this.lastAction = ''
+		this.pollTimer = null
 	}
 
 	async init(config) {
@@ -21,7 +37,9 @@ class SingularInstance extends InstanceBase {
 	}
 
 	async destroy() {
+		this.stopPolling()
 		this.connections = new Map()
+		this.compStates = new Map()
 		this.log('debug', 'Singular module destroyed')
 	}
 
@@ -69,6 +87,19 @@ class SingularInstance extends InstanceBase {
 				},
 			)
 		}
+
+		fields.push({
+			type: 'number',
+			id: 'pollInterval',
+			label: 'Polling interval (seconds, 0 = off)',
+			tooltip:
+				'How often to poll Singular for composition on-air state. Companion-driven takes update instantly ' +
+				'regardless of this; polling only catches takes made outside Companion. 1-2s feels live; lower adds API load.',
+			width: 12,
+			min: 0,
+			max: 60,
+			default: 2,
+		})
 
 		return fields
 	}
@@ -187,12 +218,17 @@ class SingularInstance extends InstanceBase {
 	}
 
 	async initSingularLive(config) {
+		this.stopPolling()
 		this.connections = new Map()
 
 		const apps = this.parseApps(config)
 		if (apps.length === 0) {
 			this.updateStatus('bad_config', 'No API URL or token configured')
 			this.setActionDefinitions(getActions.bind(this)([], {}))
+			this.setFeedbackDefinitions(getFeedbacks.bind(this)([], {}))
+			this.setVariableDefinitions([])
+			this.appChoices = []
+			this.choicesByToken = {}
 			return
 		}
 
@@ -216,7 +252,13 @@ class SingularInstance extends InstanceBase {
 			}
 		}
 
+		this.appChoices = appChoices
+		this.choicesByToken = choicesByToken
+
 		this.setActionDefinitions(getActions.bind(this)(appChoices, choicesByToken))
+		this.setFeedbackDefinitions(getFeedbacks.bind(this)(appChoices, choicesByToken))
+		this.setVariableDefinitions(this.buildVariableDefinitions(appChoices, choicesByToken))
+		this.initVariableValues(appChoices, choicesByToken)
 
 		if (okCount === apps.length) {
 			this.updateStatus('ok')
@@ -224,6 +266,146 @@ class SingularInstance extends InstanceBase {
 			this.updateStatus('ok', `${apps.length - okCount} of ${apps.length} apps failed to connect`)
 		} else {
 			this.updateStatus('connection_failure')
+		}
+
+		this.startPolling()
+	}
+
+	buildVariableDefinitions(appChoices, choicesByToken) {
+		const defs = [{ variableId: 'last_action', name: 'Last action' }]
+
+		for (const app of appChoices) {
+			const choices = choicesByToken[app.id]
+			for (const comp of choices.compositions) {
+				defs.push({ variableId: compStateVarId(app.id, comp.id), name: `${app.label} / ${comp.label} — state` })
+			}
+			for (const sel of choices.selections) {
+				defs.push({ variableId: selValueVarId(app.id, sel.id), name: `${app.label} / ${sel.label} — value (last set)` })
+				defs.push({ variableId: selLabelVarId(app.id, sel.id), name: `${app.label} / ${sel.label} — label (last set)` })
+			}
+		}
+
+		return defs
+	}
+
+	initVariableValues(appChoices, choicesByToken) {
+		const values = { last_action: this.lastAction }
+
+		for (const app of appChoices) {
+			const choices = choicesByToken[app.id]
+			for (const comp of choices.compositions) {
+				values[compStateVarId(app.id, comp.id)] = this.compStates.get(`${app.id}|${comp.id}`) ?? ''
+			}
+			for (const sel of choices.selections) {
+				values[selValueVarId(app.id, sel.id)] = this.selValues.get(`${app.id}|${sel.id}`) ?? ''
+				values[selLabelVarId(app.id, sel.id)] = this.selLabels.get(`${app.id}|${sel.id}`) ?? ''
+			}
+		}
+
+		this.setVariableValues(values)
+	}
+
+	updateStateVariables() {
+		if (!this.appChoices) return
+
+		const values = {}
+		for (const app of this.appChoices) {
+			for (const comp of this.choicesByToken[app.id].compositions) {
+				values[compStateVarId(app.id, comp.id)] = this.compStates.get(`${app.id}|${comp.id}`) ?? ''
+			}
+		}
+
+		this.setVariableValues(values)
+	}
+
+	// Record a value Companion set for a selection node so feedbacks/variables can
+	// reflect it. Not authoritative — streams/JS can change the real value.
+	recordSelection(token, controlnode, value, label) {
+		if (!token || !controlnode) return
+
+		const key = `${token}|${controlnode}`
+		this.selValues.set(key, value)
+		const values = { [selValueVarId(token, controlnode)]: value }
+
+		if (label !== undefined) {
+			this.selLabels.set(key, label)
+			values[selLabelVarId(token, controlnode)] = label
+		}
+
+		this.setVariableValues(values)
+		this.checkFeedbacks('selectionActiveValue')
+	}
+
+	recordAction(description) {
+		this.lastAction = description
+		this.setVariableValues({ last_action: description })
+	}
+
+	// Optimistically update a composition's on-air state so feedback is instant
+	// for Companion-driven takes, without waiting for the next poll.
+	recordCompState(token, comp, state) {
+		if (!token || !comp) return
+
+		this.compStates.set(`${token}|${comp}`, state)
+		this.setVariableValues({ [compStateVarId(token, comp)]: state })
+		this.checkFeedbacks('compositionIsIn')
+	}
+
+	// Take Out All clears every composition in the app — reflect that at once.
+	recordAllOut(token) {
+		const comps = this.choicesByToken?.[token]?.compositions ?? []
+		const values = {}
+		for (const comp of comps) {
+			this.compStates.set(`${token}|${comp.id}`, 'Out')
+			values[compStateVarId(token, comp.id)] = 'Out'
+		}
+		this.setVariableValues(values)
+		this.checkFeedbacks('compositionIsIn')
+	}
+
+	startPolling() {
+		this.stopPolling()
+
+		// Poll immediately so state is fresh, then on the configured interval.
+		this.pollStates()
+
+		const interval = this.config?.pollInterval ?? 2
+		const seconds = Math.max(0, Number(interval) || 0)
+		if (seconds > 0) {
+			this.pollTimer = setInterval(() => this.pollStates(), seconds * 1000)
+		}
+	}
+
+	stopPolling() {
+		if (this.pollTimer) {
+			clearInterval(this.pollTimer)
+			this.pollTimer = null
+		}
+	}
+
+	async pollStates() {
+		if (!this.connections || this.connections.size === 0) return
+		// Overlap guard: never let a new poll start while one is still in flight,
+		// so a fast interval can't stack up requests against the API.
+		if (this.polling) return
+		this.polling = true
+
+		try {
+			for (const [key, conn] of this.connections) {
+				try {
+					const states = await conn.getModelStates()
+					for (const [comp, state] of Object.entries(states)) {
+						this.compStates.set(`${key}|${comp}`, state)
+					}
+				} catch (err) {
+					this.log('debug', `Poll failed for app ${key}: ${err}`)
+				}
+			}
+
+			this.updateStateVariables()
+			this.checkFeedbacks('compositionIsIn')
+		} finally {
+			this.polling = false
 		}
 	}
 

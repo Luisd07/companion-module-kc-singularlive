@@ -16,7 +16,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | --------- | ---------------------------- | --------------------------------------- |
 | **0.1.0** | ✅ Multi-app foundation      | Multi-token support, all core actions   |
 | **0.2.0** | ✅ Payload & selection power | Batch payload update, Cycle selection   |
-| **0.3.0** | 📋 State sync                | Polling loop, Variables, core Feedbacks |
+| **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks |
 | **0.4.0** | 📋 Timing                    | Timed auto-take-out + feedback          |
 | **0.5.0** | 📋 Show control              | Composition groups, Snapshots           |
 | **0.6.0** | 📋 History & persistence     | Undo, state persistence across restarts |
@@ -65,28 +65,28 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 _Depends on the polling loop (0.3.0)._
 
-| Feature                            | Version | Status | Notes                                      |
-| ---------------------------------- | ------- | ------ | ------------------------------------------ |
-| Composition: Is In                 | 0.3.0   | 📋     | Button reflects on-air state               |
-| Selection Node: Is Active Value    | 0.3.0   | 📋     | Button lit when selection == chosen value  |
-| Composition: Timed Take-Out Active | 0.4.0   | 📋     | Ships with the timed auto-take-out feature |
+| Feature                            | Version | Status | Notes                                                                           |
+| ---------------------------------- | ------- | ------ | ------------------------------------------------------------------------------- |
+| Composition: Is In                 | 0.3.0   | ✅     | Button reflects on-air state (from polling)                                     |
+| Selection Node: Is Active Value    | 0.3.0   | ✅     | Lit when Companion's last-set value == chosen (not authoritative vs streams/JS) |
+| Composition: Timed Take-Out Active | 0.4.0   | 📋     | Ships with the timed auto-take-out feature                                      |
 
 ## Variables
 
 _Depends on the polling loop (0.3.0)._
 
-| Feature                                        | Version | Status | Notes                           |
-| ---------------------------------------------- | ------- | ------ | ------------------------------- |
-| `comp_{app}_{id}_state` — in / out             | 0.3.0   | 📋     | Per-composition on-air state    |
-| `sel_{app}_{nodeId}` — current selection value | 0.3.0   | 📋     | Live selection value            |
-| `last_action` — human-readable last action     | 0.3.0   | 📋     | Feeds the Undo history in 0.6.0 |
+| Feature                                        | Version | Status | Notes                                        |
+| ---------------------------------------------- | ------- | ------ | -------------------------------------------- |
+| `comp_{app}_{id}_state` — in / out             | 0.3.0   | ✅     | Per-composition on-air state (from polling)  |
+| `sel_{app}_{nodeId}` — current selection value | 0.3.0   | ✅     | Value Companion last set (not authoritative) |
+| `last_action` — human-readable last action     | 0.3.0   | ✅     | Feeds the Undo history in 0.6.0              |
 
 ## Infrastructure
 
 | Feature                                           | Version | Status | Notes                                                                             |
 | ------------------------------------------------- | ------- | ------ | --------------------------------------------------------------------------------- |
 | Multi-app token support                           | 0.1.0   | ✅     | Label:token config, Control App dropdown on every action                          |
-| Polling loop (Singular → Companion sync)          | 0.3.0   | 📋     | Configurable interval; enabler for all feedbacks & variables                      |
+| Polling loop (Singular → Companion sync)          | 0.3.0   | ✅     | Configurable interval (0 = off); polls /model for composition states              |
 | State persistence across restarts                 | 0.6.0   | 📋     | Cycle indices, comp states, snapshots, groups survive restart                     |
 | Control-call error handling                       | 1.0.0   | 📋     | `api.js` PATCH/POST currently fire-and-forget — await responses, surface failures |
 | Presets                                           | 1.0.0   | 📋     | Drag-and-drop buttons for common actions                                          |
