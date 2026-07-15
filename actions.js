@@ -64,6 +64,44 @@ export function getActions(apps, choicesByToken) {
 				await conn.updateControlNode(nodeFor(action.options, 'controlnode'), parsedValue)
 			},
 		},
+		batchUpdatePayload: {
+			name: 'Batch Update Payload Nodes',
+			options: [
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp'),
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'Payload (JSON)',
+					id: 'payload',
+					default: '{}',
+					tooltip:
+						'A JSON object mapping node id to value, e.g. {"Name": "$(custom:driver)", "Score": "42"}. ' +
+						'Keep values in quotes. The whole object is sent to Singular in one call.',
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+
+				const parsed = await this.parseVariablesInString(action.options.payload)
+
+				let payload
+				try {
+					payload = JSON.parse(parsed)
+				} catch {
+					this.log('warn', `Batch payload: invalid JSON after variable substitution: ${parsed}`)
+					return
+				}
+
+				if (typeof payload !== 'object' || Array.isArray(payload) || payload === null) {
+					this.log('warn', 'Batch payload: expected a JSON object of node id -> value')
+					return
+				}
+
+				await conn.updatePayload(nodeFor(action.options, 'comp'), payload)
+			},
+		},
 		updateButtonNode: {
 			name: 'Activate button',
 			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'buttons', 'Button', 'controlnode')],
