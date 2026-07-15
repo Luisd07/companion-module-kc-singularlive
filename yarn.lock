@@ -744,6 +744,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"companion-module-kc-singularlive@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "companion-module-kc-singularlive@workspace:."
+  dependencies:
+    "@companion-module/base": "npm:~1.11.3"
+    "@companion-module/tools": "npm:^2.6.1"
+    eslint: "npm:^9.26.0"
+    node-fetch: "npm:^3.3.2"
+    prettier: "npm:^3.4.2"
+  languageName: unknown
+  linkType: soft
+
 "concat-map@npm:0.0.1":
   version: 0.0.1
   resolution: "concat-map@npm:0.0.1"
@@ -1949,18 +1961,6 @@ __metadata:
   checksum: 10c0/1dbed0726dd0e1152a92696c76c7f06084eb32a90f0528d11acd764043aacf76994b2fb30aa1291a21bd019d6699164d048286309a278855ee7bec06cf6fb690
   languageName: node
   linkType: hard
-
-"singularlive-studio@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "singularlive-studio@workspace:."
-  dependencies:
-    "@companion-module/base": "npm:~1.11.3"
-    "@companion-module/tools": "npm:^2.6.1"
-    eslint: "npm:^9.26.0"
-    node-fetch: "npm:^3.3.2"
-    prettier: "npm:^3.4.2"
-  languageName: unknown
-  linkType: soft
 
 "source-map-support@npm:~0.5.20":
   version: 0.5.21

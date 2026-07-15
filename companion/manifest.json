@@ -1,12 +1,12 @@
 {
-	"id": "kc-singular-bitfocus-module",
-	"name": "kc-singular-bitfocus-module",
+	"id": "kc-singularlive",
+	"name": "kc-singularlive",
 	"shortname": "kc-singular",
 	"description": "KartChaser's Custom Control for Singular.Live Studio",
 	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/Luisd07/kc-singular-bitfocus-module.git",
-	"bugs": "https://github.com/Luisd07/kc-singular-bitfocus-module/issues",
+	"repository": "git+https://github.com/Luisd07/companion-module-kc-singularlive.git",
+	"bugs": "https://github.com/Luisd07/companion-module-kc-singularlive/issues",
 	"maintainers": [
 		{
 			"name": "Luis Diaz",
