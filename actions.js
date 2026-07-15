@@ -1,45 +1,55 @@
-export function getActions(compositions, controlnodes, buttons, checkboxes, timers, selections, colors) {
+function tokenField(apps) {
+	return {
+		type: 'dropdown',
+		label: 'Control App',
+		id: 'token',
+		choices: apps,
+		default: apps?.[0]?.id,
+	}
+}
+
+function perAppFields(apps, choicesByToken, choiceKey, label, idPrefix) {
+	return apps.map((app) => {
+		const choices = choicesByToken[app.id]?.[choiceKey] ?? []
+		return {
+			type: 'dropdown',
+			label,
+			id: `${idPrefix}_${app.id}`,
+			choices,
+			default: choices?.[0]?.id,
+			isVisible: new Function('options', `return options.token == '${app.id}'`),
+		}
+	})
+}
+
+export function getActions(apps, choicesByToken) {
+	const connFor = (options) => this.connections?.get(options.token)
+	const nodeFor = (options, idPrefix) => options[`${idPrefix}_${options.token}`]
+
 	return {
 		animateIn: {
 			name: 'Animate In',
-			options: [
-				{
-					type: 'dropdown',
-					label: 'Composition',
-					id: 'comp',
-					choices: compositions,
-					default: compositions?.[0]?.id,
-				},
-			],
+			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp')],
 			callback: async (action) => {
-				await this.SingularLive.animateIn(action.options.comp)
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.animateIn(nodeFor(action.options, 'comp'))
 			},
 		},
 		animateOut: {
 			name: 'Animate Out',
-			options: [
-				{
-					type: 'dropdown',
-					label: 'Composition',
-					id: 'comp',
-					choices: compositions,
-					default: compositions?.[0]?.id,
-				},
-			],
+			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'compositions', 'Composition', 'comp')],
 			callback: async (action) => {
-				await this.SingularLive.animateOut(action.options.comp)
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.animateOut(nodeFor(action.options, 'comp'))
 			},
 		},
 		updateControlNode: {
 			name: 'Update Control Node',
 			options: [
-				{
-					type: 'dropdown',
-					label: 'Control Node',
-					id: 'controlnode',
-					choices: controlnodes,
-					default: controlnodes?.[0]?.id,
-				},
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'controlnodes', 'Control Node', 'controlnode'),
 				{
 					type: 'textinput',
 					useVariables: true,
@@ -48,35 +58,26 @@ export function getActions(compositions, controlnodes, buttons, checkboxes, time
 				},
 			],
 			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
 				let parsedValue = await this.parseVariablesInString(action.options.value)
-				await this.SingularLive.updateControlNode(action.options.controlnode, parsedValue)
+				await conn.updateControlNode(nodeFor(action.options, 'controlnode'), parsedValue)
 			},
 		},
 		updateButtonNode: {
 			name: 'Activate button',
-			options: [
-				{
-					type: 'dropdown',
-					label: 'Button',
-					id: 'controlnode',
-					choices: buttons,
-					default: buttons?.[0]?.id,
-				},
-			],
+			options: [tokenField(apps), ...perAppFields(apps, choicesByToken, 'buttons', 'Button', 'controlnode')],
 			callback: async (action) => {
-				await this.SingularLive.updateButtonNode(action.options.controlnode)
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.updateButtonNode(nodeFor(action.options, 'controlnode'))
 			},
 		},
 		updateCheckboxNode: {
 			name: 'Update Checkbox Field',
 			options: [
-				{
-					type: 'dropdown',
-					label: 'Control Node',
-					id: 'controlnode',
-					choices: checkboxes,
-					default: checkboxes?.[0]?.id,
-				},
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'checkboxes', 'Control Node', 'controlnode'),
 				{
 					type: 'checkbox',
 					label: 'Value',
@@ -84,19 +85,16 @@ export function getActions(compositions, controlnodes, buttons, checkboxes, time
 				},
 			],
 			callback: async (action) => {
-				await this.SingularLive.updateCheckboxNode(action.options.controlnode, action.options.value)
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.updateCheckboxNode(nodeFor(action.options, 'controlnode'), action.options.value)
 			},
 		},
 		updateTimerNode: {
 			name: 'Update Time Control Field',
 			options: [
-				{
-					type: 'dropdown',
-					label: 'Control Node',
-					id: 'controlnode',
-					choices: timers,
-					default: timers?.[0]?.id,
-				},
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'timers', 'Control Node', 'controlnode'),
 				{
 					type: 'dropdown',
 					label: 'Action',
@@ -119,46 +117,54 @@ export function getActions(compositions, controlnodes, buttons, checkboxes, time
 				},
 			],
 			callback: async (action) => {
-				await this.SingularLive.updateTimer(action.options.controlnode, action.options.value)
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.updateTimer(nodeFor(action.options, 'controlnode'), action.options.value)
 			},
 		},
 		updateSelectionNode: {
 			name: 'Update Selection Field',
 			options: [
-				{
-					type: 'dropdown',
-					label: 'Control Node',
-					id: 'controlnode',
-					choices: selections,
-					default: selections?.[0]?.id,
-					allowCustom: false,
-				},
-				...selections.map((selection) => ({
-					type: 'dropdown',
-					label: 'Selection',
-					id: selection.id,
-					choices: selection.selections,
-					default: selection.selections?.[0]?.id,
-					isVisible: new Function('options', `return options.controlnode == '${selection.id}'`),
-				})),
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.selections ?? []
+					return {
+						type: 'dropdown',
+						label: 'Control Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						allowCustom: false,
+						isVisible: new Function('options', `return options.token == '${app.id}'`),
+					}
+				}),
+
+				...apps.flatMap((app) =>
+					(choicesByToken[app.id]?.selections ?? []).map((selection) => ({
+						type: 'dropdown',
+						label: 'Selection',
+						id: `${app.id}__${selection.id}`,
+						choices: selection.selections,
+						default: selection.selections?.[0]?.id,
+						isVisible: new Function(
+							'options',
+							`return options.token == '${app.id}' && options['controlnode_${app.id}'] == '${selection.id}'`,
+						),
+					})),
+				),
 			],
 			callback: async (action) => {
-				await this.SingularLive.updateControlNode(
-					action.options.controlnode,
-					action.options[action.options.controlnode],
-				)
+				const conn = connFor(action.options)
+				if (!conn) return
+				const controlnode = nodeFor(action.options, 'controlnode')
+				await conn.updateControlNode(controlnode, action.options[`${action.options.token}__${controlnode}`])
 			},
 		},
 		updateColorNode: {
 			name: 'Update Color Field',
 			options: [
-				{
-					type: 'dropdown',
-					label: 'Control Node',
-					id: 'controlnode',
-					choices: colors,
-					default: colors?.[0]?.id,
-				},
+				tokenField(apps),
+				...perAppFields(apps, choicesByToken, 'colors', 'Control Node', 'controlnode'),
 				{
 					type: 'colorpicker',
 					label: 'Value',
@@ -169,6 +175,8 @@ export function getActions(compositions, controlnodes, buttons, checkboxes, time
 				},
 			],
 			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
 				let color = action.options.value
 				let values = color.match(/\(([^()]*)\)/g)
 				let colorArray = []
@@ -184,22 +192,26 @@ export function getActions(compositions, controlnodes, buttons, checkboxes, time
 						b: colorArray[2],
 						a: colorArray[3],
 					}
-					await this.SingularLive.updateColorNode(action.options.controlnode, colorData)
+					await conn.updateColorNode(nodeFor(action.options, 'controlnode'), colorData)
 				}
 			},
 		},
 		takeOutAllOutput: {
 			name: 'Take Out All Output',
-			options: [],
-			callback: async () => {
-				await this.SingularLive.takeOutAllOutput()
+			options: [tokenField(apps)],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.takeOutAllOutput()
 			},
 		},
 		refreshComposition: {
 			name: 'Refresh Composition',
-			options: [],
-			callback: async () => {
-				await this.SingularLive.refreshComposition()
+			options: [tokenField(apps)],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+				await conn.refreshComposition()
 			},
 		},
 	}
