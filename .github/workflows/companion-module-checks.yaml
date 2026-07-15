@@ -7,8 +7,6 @@ jobs:
   check:
     name: Check module
 
-    if: ${{ !contains(github.repository, 'kc-singular-bitfocus-module') }}
-
     permissions:
       packages: read
 
