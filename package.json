@@ -1,11 +1,11 @@
 {
-	"name": "singularlive-studio",
-	"version": "2.1.2",
+	"name": "kc-singular-bitfocus-module",
+	"version": "0.1.0",
 	"main": "index.js",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/bitfocus/companion-module-singularlive-studio.git"
+		"url": "git+https://github.com/Luisd07/kc-singular-bitfocus-module.git"
 	},
 	"type": "module",
 	"scripts": {

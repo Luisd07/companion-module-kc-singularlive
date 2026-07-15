@@ -1,20 +1,16 @@
 {
-	"id": "singularlive-studio",
-	"name": "singularlive-studio",
-	"shortname": "singular",
-	"description": "Control Singular.Live Studio",
+	"id": "kc-singular-bitfocus-module",
+	"name": "kc-singular-bitfocus-module",
+	"shortname": "kc-singular",
+	"description": "KartChaser's Custom Control for Singular.Live Studio",
 	"version": "0.0.0",
 	"license": "MIT",
-	"repository": "git+https://github.com/bitfocus/companion-module-singularlive-studio.git",
-	"bugs": "https://github.com/bitfocus/companion-module-singularlive-studio/issues",
+	"repository": "git+https://github.com/Luisd07/kc-singular-bitfocus-module.git",
+	"bugs": "https://github.com/Luisd07/kc-singular-bitfocus-module/issues",
 	"maintainers": [
 		{
-			"name": "Fredrik Mediå",
-			"email": "fredrik.mediaa@gmail.com"
-		},
-		{
-			"name": "Bryce Seifert",
-			"email": "bryceapps@icloud.com"
+			"name": "Luis Diaz",
+			"email": "luimd0728@gmail.com"
 		}
 	],
 	"legacyIds": [],
@@ -24,7 +20,7 @@
 		"apiVersion": "0.0.0",
 		"entrypoint": "../index.js"
 	},
-	"manufacturer": "Singular.Live",
-	"products": ["Studio"],
+	"manufacturer": "KartChaser",
+	"products": ["Singular.Live"],
 	"keywords": ["Graphics"]
 }
