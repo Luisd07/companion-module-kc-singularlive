@@ -12,6 +12,13 @@ const compStateVarId = (appKey, comp) => `comp_${appKey}_${sanitize(comp)}_state
 const selValueVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}`
 const selLabelVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}_label`
 
+const UNDO_DEPTH = 10
+
+// Config keys that require a reconnect when they change. Everything else (e.g.
+// the persisted-state blob we write back) can change without re-initialising.
+const CONNECTION_KEYS = ['numApps', 'pollInterval', 'apiurl']
+for (let i = 0; i < MAX_APPS; i++) CONNECTION_KEYS.push(`app_${i}_name`, `app_${i}_token`)
+
 class SingularInstance extends InstanceBase {
 	constructor(internal) {
 		super(internal)
@@ -27,10 +34,13 @@ class SingularInstance extends InstanceBase {
 		this.selLabels = new Map()
 		// Pending auto-take-out timers, keyed by `${token}|${compName}`.
 		this.autoOutTimers = new Map()
-		// Saved scene snapshots, keyed by `${token}|${name}`. In-memory (persisted later).
+		// Saved scene snapshots, keyed by `${token}|${name}`.
 		this.snapshots = new Map()
+		// Undo history of reversible operations (most recent last), capped at UNDO_DEPTH.
+		this.undoStack = []
 		this.lastAction = ''
 		this.pollTimer = null
+		this.saveTimer = null
 	}
 
 	async init(config) {
@@ -106,12 +116,63 @@ class SingularInstance extends InstanceBase {
 			default: 2,
 		})
 
+		// Hidden field used to persist module state (cycle indices, selection values,
+		// snapshots) across restarts. Not shown to the user.
+		fields.push({
+			type: 'textinput',
+			id: 'persistState',
+			label: 'Persisted state',
+			width: 12,
+			default: '',
+			isVisible: new Function('options', 'return false'),
+		})
+
 		return fields
 	}
 
 	async configUpdated(config) {
+		// Only reconnect when a connection-relevant field changed. This avoids a
+		// re-init loop when we write our own persisted-state blob back via saveConfig.
+		const reconnect = CONNECTION_KEYS.some((key) => this.config?.[key] !== config[key])
 		this.config = config
-		this.initSingularLive(this.config)
+
+		if (reconnect) {
+			this.initSingularLive(this.config)
+		}
+	}
+
+	serializeState() {
+		return {
+			cycleState: Object.fromEntries(this.cycleState),
+			selValues: Object.fromEntries(this.selValues),
+			selLabels: Object.fromEntries(this.selLabels),
+			snapshots: Object.fromEntries(this.snapshots),
+		}
+	}
+
+	loadPersistedState() {
+		const raw = this.config?.persistState
+		if (!raw) return
+
+		try {
+			const state = JSON.parse(raw)
+			this.cycleState = new Map(Object.entries(state.cycleState ?? {}))
+			this.selValues = new Map(Object.entries(state.selValues ?? {}))
+			this.selLabels = new Map(Object.entries(state.selLabels ?? {}))
+			this.snapshots = new Map(Object.entries(state.snapshots ?? {}))
+		} catch {
+			this.log('warn', 'Could not parse persisted state; starting fresh')
+		}
+	}
+
+	// Debounced so a burst of changes (e.g. rapid cycling) writes once.
+	persist() {
+		if (this.saveTimer) clearTimeout(this.saveTimer)
+		this.saveTimer = setTimeout(() => {
+			this.saveTimer = null
+			this.config = { ...this.config, persistState: JSON.stringify(this.serializeState()) }
+			this.saveConfig(this.config)
+		}, 500)
 	}
 
 	parseApps(config) {
@@ -225,6 +286,7 @@ class SingularInstance extends InstanceBase {
 	async initSingularLive(config) {
 		this.stopPolling()
 		this.clearAllAutoOut()
+		this.loadPersistedState()
 		this.connections = new Map()
 
 		const apps = this.parseApps(config)
@@ -278,7 +340,10 @@ class SingularInstance extends InstanceBase {
 	}
 
 	buildVariableDefinitions(appChoices, choicesByToken) {
-		const defs = [{ variableId: 'last_action', name: 'Last action' }]
+		const defs = [
+			{ variableId: 'last_action', name: 'Last action' },
+			{ variableId: 'undo_last', name: 'Undo — next action to undo' },
+		]
 
 		for (const app of appChoices) {
 			const choices = choicesByToken[app.id]
@@ -295,7 +360,10 @@ class SingularInstance extends InstanceBase {
 	}
 
 	initVariableValues(appChoices, choicesByToken) {
-		const values = { last_action: this.lastAction }
+		const values = {
+			last_action: this.lastAction,
+			undo_last: this.undoStack[this.undoStack.length - 1]?.description ?? '',
+		}
 
 		for (const app of appChoices) {
 			const choices = choicesByToken[app.id]
@@ -340,6 +408,7 @@ class SingularInstance extends InstanceBase {
 
 		this.setVariableValues(values)
 		this.checkFeedbacks('selectionActiveValue')
+		this.persist()
 	}
 
 	recordAction(description) {
@@ -457,6 +526,7 @@ class SingularInstance extends InstanceBase {
 
 		this.snapshots.set(`${token}|${name}`, { comps, sels })
 		this.recordAction(`Save snapshot: ${name}`)
+		this.persist()
 	}
 
 	async recallSnapshot(token, name, restoreSelections) {
@@ -479,6 +549,61 @@ class SingularInstance extends InstanceBase {
 		}
 
 		this.recordAction(`Recall snapshot: ${name}`)
+	}
+
+	pushUndo(description, undo) {
+		this.undoStack.push({ description, undo })
+		while (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift()
+		this.setVariableValues({ undo_last: description })
+	}
+
+	async undoLast() {
+		const entry = this.undoStack.pop()
+		if (!entry) {
+			this.log('info', 'Nothing to undo')
+			return
+		}
+
+		await entry.undo()
+		this.recordAction(`Undo: ${entry.description}`)
+		this.setVariableValues({ undo_last: this.undoStack[this.undoStack.length - 1]?.description ?? '' })
+	}
+
+	// Each capture* reads the current state and returns a closure that restores it.
+	// Call the capture BEFORE performing the action, then pushUndo() the closure.
+	captureCompUndo(token, comp) {
+		const before = this.compStates.get(`${token}|${comp}`) ?? 'Out'
+		return () => {
+			const conn = this.connections?.get(token)
+			if (conn) conn.setStates([{ composition: comp, state: before }])
+			this.recordCompState(token, comp, before)
+		}
+	}
+
+	captureGroupUndo(token, comps) {
+		const before = {}
+		for (const comp of comps) before[comp] = this.compStates.get(`${token}|${comp}`) ?? 'Out'
+		return () => {
+			const conn = this.connections?.get(token)
+			if (conn) conn.setStates(Object.entries(before).map(([composition, state]) => ({ composition, state })))
+			this.recordCompStatesBatch(token, before)
+		}
+	}
+
+	captureSelUndo(token, controlnode) {
+		const key = `${token}|${controlnode}`
+		const beforeVal = this.selValues.get(key)
+		const beforeLabel = this.selLabels.get(key)
+		const beforeIdx = this.cycleState.get(key)
+		return () => {
+			const conn = this.connections?.get(token)
+			if (beforeVal !== undefined) {
+				if (conn) conn.updateControlNode(controlnode, beforeVal)
+				this.recordSelection(token, controlnode, beforeVal, beforeLabel)
+			}
+			if (beforeIdx !== undefined) this.cycleState.set(key, beforeIdx)
+			else this.cycleState.delete(key)
+		}
 	}
 
 	startPolling() {

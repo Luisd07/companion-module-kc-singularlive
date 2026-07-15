@@ -37,8 +37,10 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				const comp = nodeFor(action.options, 'comp')
+				const undo = this.captureCompUndo(action.options.token, comp)
 				await conn.animateIn(comp)
 				this.recordCompState(action.options.token, comp, 'In')
+				this.pushUndo(`Take In: ${comp}`, undo)
 				record(`Take In: ${comp}`)
 			},
 		},
@@ -49,9 +51,11 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				const comp = nodeFor(action.options, 'comp')
+				const undo = this.captureCompUndo(action.options.token, comp)
 				await conn.animateOut(comp)
 				this.recordCompState(action.options.token, comp, 'Out')
 				this.clearAutoOut(action.options.token, comp)
+				this.pushUndo(`Take Out: ${comp}`, undo)
 				record(`Take Out: ${comp}`)
 			},
 		},
@@ -72,7 +76,12 @@ export function getActions(apps, choicesByToken) {
 			callback: async (action) => {
 				if (!connFor(action.options)) return
 				const comp = nodeFor(action.options, 'comp')
+				const compUndo = this.captureCompUndo(action.options.token, comp)
 				await this.takeInWithTimeout(action.options.token, comp, action.options.seconds)
+				this.pushUndo(`Take In (timed): ${comp}`, () => {
+					this.clearAutoOut(action.options.token, comp)
+					compUndo()
+				})
 				record(`Take In (auto-out ${action.options.seconds}s): ${comp}`)
 			},
 		},
@@ -259,6 +268,7 @@ export function getActions(apps, choicesByToken) {
 				const conn = connFor(action.options)
 				if (!conn) return
 				const controlnode = nodeFor(action.options, 'controlnode')
+				const undo = this.captureSelUndo(action.options.token, controlnode)
 				const value = action.options[`${action.options.token}__${controlnode}`]
 				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
 				const label = selection?.selections?.find((v) => v.id === value)?.label
@@ -270,6 +280,7 @@ export function getActions(apps, choicesByToken) {
 				if (idx >= 0) this.cycleState.set(`${action.options.token}|${controlnode}`, idx)
 
 				this.recordSelection(action.options.token, controlnode, value, label)
+				this.pushUndo(`Select ${nodeName(controlnode)} = ${label ?? value}`, undo)
 				record(`Select ${nodeName(controlnode)} = ${label ?? value}`)
 			},
 		},
@@ -296,6 +307,7 @@ export function getActions(apps, choicesByToken) {
 				const controlnode = nodeFor(action.options, 'controlnode')
 				if (!controlnode) return
 
+				const undo = this.captureSelUndo(action.options.token, controlnode)
 				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
 				const values = selection?.selections ?? []
 				const len = values.length
@@ -313,6 +325,7 @@ export function getActions(apps, choicesByToken) {
 				this.cycleState.set(key, next)
 				await conn.updateControlNode(controlnode, values[next].id)
 				this.recordSelection(action.options.token, controlnode, values[next].id, values[next].label)
+				this.pushUndo(`Cycle ${nodeName(controlnode)} → ${values[next].label ?? values[next].id}`, undo)
 				record(`Cycle ${nodeName(controlnode)} → ${values[next].label ?? values[next].id}`)
 			},
 		},
@@ -407,6 +420,7 @@ export function getActions(apps, choicesByToken) {
 				const comps = action.options[`comps_${action.options.token}`] ?? []
 				if (!comps.length) return
 
+				const undo = this.captureGroupUndo(action.options.token, comps)
 				const state = action.options.state
 				conn.setStates(comps.map((composition) => ({ composition, state })))
 
@@ -414,6 +428,7 @@ export function getActions(apps, choicesByToken) {
 				for (const comp of comps) stateByComp[comp] = state
 				this.recordCompStatesBatch(action.options.token, stateByComp)
 
+				this.pushUndo(`Group ${state === 'In' ? 'Take In' : 'Take Out'}: ${comps.length} comps`, undo)
 				record(`Group ${state === 'In' ? 'Take In' : 'Take Out'}: ${comps.length} comps`)
 			},
 		},
@@ -451,6 +466,13 @@ export function getActions(apps, choicesByToken) {
 			],
 			callback: async (action) => {
 				await this.recallSnapshot(action.options.token, action.options.name, action.options.restoreSelections)
+			},
+		},
+		undoLastAction: {
+			name: 'Undo Last Action',
+			options: [],
+			callback: async () => {
+				await this.undoLast()
 			},
 		},
 	}

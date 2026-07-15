@@ -3,7 +3,7 @@
 	"name": "kc-singularlive",
 	"shortname": "kc-singular",
 	"description": "KartChaser's Custom Control for Singular.Live Studio",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"license": "MIT",
 	"repository": "git+https://github.com/Luisd07/companion-module-kc-singularlive.git",
 	"bugs": "https://github.com/Luisd07/companion-module-kc-singularlive/issues",

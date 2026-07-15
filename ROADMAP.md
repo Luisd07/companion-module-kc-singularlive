@@ -19,7 +19,7 @@ capability area. `1.0.0` is the first hardened, documented release.
 | **0.3.0** | ✅ State sync                | Polling loop, Variables, core Feedbacks |
 | **0.4.0** | ✅ Timing                    | Timed auto-take-out + feedback          |
 | **0.5.0** | ✅ Show control              | Composition groups, Snapshots           |
-| **0.6.0** | 📋 History & persistence     | Undo, state persistence across restarts |
+| **0.6.0** | ✅ History & persistence     | Undo, state persistence across restarts |
 | **1.0.0** | 📋 Hardening                 | Error handling, presets, docs, cleanup  |
 
 ---
@@ -54,12 +54,12 @@ capability area. `1.0.0` is the first hardened, documented release.
 
 ## Show Control
 
-| Feature                   | Version | Status | Notes                                                                               |
-| ------------------------- | ------- | ------ | ----------------------------------------------------------------------------------- |
-| Trigger Composition Group | 0.5.0   | ✅     | Inline multi-select of comps, fired together in one PATCH (in or out)               |
-| Save Snapshot             | 0.5.0   | ✅     | Capture comp on-air states + Companion-set selection values (named, in-memory)      |
-| Recall Snapshot           | 0.5.0   | ✅     | Restore comp states + optionally selection values, re-fired to Singular             |
-| Undo Last Action          | 0.6.0   | 📋     | Reverse last take / selection change; 10-deep history. Depends on state persistence |
+| Feature                   | Version | Status | Notes                                                                             |
+| ------------------------- | ------- | ------ | --------------------------------------------------------------------------------- |
+| Trigger Composition Group | 0.5.0   | ✅     | Inline multi-select of comps, fired together in one PATCH (in or out)             |
+| Save Snapshot             | 0.5.0   | ✅     | Capture comp on-air states + Companion-set selection values (named, in-memory)    |
+| Recall Snapshot           | 0.5.0   | ✅     | Restore comp states + optionally selection values, re-fired to Singular           |
+| Undo Last Action          | 0.6.0   | ✅     | Reverses last take / timed / group / selection / cycle; 10-deep in-memory history |
 
 ## Feedbacks
 
@@ -87,7 +87,7 @@ _Depends on the polling loop (0.3.0)._
 | ------------------------------------------------- | ------- | ------ | --------------------------------------------------------------------------------- |
 | Multi-app token support                           | 0.1.0   | ✅     | Label:token config, Control App dropdown on every action                          |
 | Polling loop (Singular → Companion sync)          | 0.3.0   | ✅     | Configurable interval (0 = off); polls /model for composition states              |
-| State persistence across restarts                 | 0.6.0   | 📋     | Cycle indices, comp states, snapshots, groups survive restart                     |
+| State persistence across restarts                 | 0.6.0   | ✅     | Cycle indices, selection values, snapshots survive restart (saveConfig blob)      |
 | Control-call error handling                       | 1.0.0   | 📋     | `api.js` PATCH/POST currently fire-and-forget — await responses, surface failures |
 | Presets                                           | 1.0.0   | 📋     | Drag-and-drop buttons for common actions                                          |
 | Remove dead `handleError`/`handleConnectionError` | 1.0.0   | 📋     | Orphaned since the legacy `action()` wrapper was removed                          |
