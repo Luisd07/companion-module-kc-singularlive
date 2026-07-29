@@ -145,6 +145,55 @@ export function getActions(apps, choicesByToken) {
 				record(`Set ${nodeName(controlnode)} = ${parsedValue}`)
 			},
 		},
+		updateControlNodeByName: {
+			name: 'Update Control Node (by name, variable-aware)',
+			options: [
+				tokenField(apps),
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'Composition',
+					id: 'composition',
+					default: '',
+					tooltip:
+						'Composition name exactly as it appears in Singular. Supports variables, so one button can drive ' +
+						'a different composition depending on state.',
+				},
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'Node id',
+					id: 'node',
+					default: '',
+					tooltip: 'Control node id within that composition. Supports variables.',
+				},
+				{
+					type: 'textinput',
+					useVariables: true,
+					label: 'Value',
+					id: 'value',
+					default: '',
+				},
+			],
+			callback: async (action) => {
+				const conn = connFor(action.options)
+				if (!conn) return
+
+				const composition = (await this.parseVariablesInString(action.options.composition)).trim()
+				const node = (await this.parseVariablesInString(action.options.node)).trim()
+				if (!composition || !node) {
+					this.log('warn', 'Update Control Node (by name): composition and node id are both required')
+					return
+				}
+
+				const value = await this.parseVariablesInString(action.options.value)
+				const controlnode = `${composition}&!&!&${node}`
+				// No dropdown to validate against, so a typo only shows up as a failed
+				// call — report it rather than failing silently.
+				if (!(await send(conn.updateControlNode(controlnode, value), `Set ${composition} / ${node}`))) return
+				record(`Set ${composition} / ${node} = ${value}`)
+			},
+		},
 		adjustNumberNode: {
 			name: 'Adjust Number Node (±)',
 			options: [
@@ -675,7 +724,7 @@ export function getActions(apps, choicesByToken) {
 			},
 		},
 		resetSelection: {
-			name: 'Reset Selection to Default',
+			name: 'Reset Selection',
 			options: [
 				tokenField(apps),
 				...apps.map((app) => {
@@ -690,6 +739,19 @@ export function getActions(apps, choicesByToken) {
 						isVisible: isVisibleFor(app.id),
 					}
 				}),
+				{
+					type: 'dropdown',
+					label: 'Reset to',
+					id: 'target',
+					choices: [
+						{ id: 'first', label: 'First entry in the list' },
+						{ id: 'default', label: 'Node default (as set in Singular)' },
+					],
+					default: 'first',
+					tooltip:
+						'These are often different values. A "clear this graphic" button usually wants the first entry ' +
+						'(e.g. "No Active Class"), which is rarely the composition default.',
+				},
 			],
 			callback: async (action) => {
 				const conn = connFor(action.options)
@@ -698,7 +760,14 @@ export function getActions(apps, choicesByToken) {
 				if (!controlnode) return
 
 				const selection = (choicesByToken[action.options.token]?.selections ?? []).find((s) => s.id === controlnode)
-				const value = selection?.default ?? selection?.selections?.[0]?.id
+				// Buttons saved before this option existed carry no `target`, so fall
+				// back to first-entry — upgrading must never silently change what an
+				// existing reset button puts on screen.
+				const target = action.options.target ?? 'first'
+				const value =
+					target === 'default'
+						? (selection?.default ?? selection?.selections?.[0]?.id)
+						: (selection?.selections?.[0]?.id ?? selection?.default)
 				if (value === undefined) return
 				const label = selection?.selections?.find((v) => v.id === value)?.label
 

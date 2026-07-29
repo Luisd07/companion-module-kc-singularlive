@@ -53,6 +53,30 @@ path) to test changes live.
 
 ## Changelog
 
+### v1.1.0
+
+- **Live state from Singular.** Polling moved from `/model` to `/control`, which
+  returns current control-node values rather than defaults — and is about half
+  the payload. `/model` is now read only at connect, for structure.
+- **Live value variables** — `live_{app}_{comp}_{node}` for every control node,
+  usable directly in button text (e.g. the on-air driver name or fastest lap).
+- **Feedbacks** — "Checkbox Node: Is Checked (live)" reads the checkbox straight
+  from Singular, so no parallel custom variable can drift out of sync;
+  "Control Node: Live Value Is" compares any node's live value (contains /
+  equals / not-equals / empty).
+- **Action** — "Update Control Node (by name, variable-aware)": composition and
+  node id both accept variables, so one button can retarget at fire time.
+- "Reset Selection to Default" is now just "Reset Selection", with a **Reset to**
+  choice of first-entry or node-default. First entry is the default and is what
+  existing buttons keep doing — a "clear this graphic" button usually wants
+  "No Active Class" rather than whatever the composition defaults to.
+- Composition states normalised — Singular reports `In` / `Out1` / `Out2`, which
+  previously fought the optimistic state written after a Companion take.
+- Fixes: number `min`/`max`/`defaultValue` are no longer dropped when reading the
+  model, so clamping and "Reset Selection to Default" work as documented; the
+  "Invalid token" log message fires again; a debounced state save no longer runs
+  after the instance is destroyed; presets emit real line breaks.
+
 ### v1.0.0
 
 - Per-app resilience: independent connect, auto-reconnect with backoff, manual

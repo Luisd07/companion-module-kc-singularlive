@@ -5,7 +5,7 @@ import { InstanceBase, runEntrypoint } from '@companion-module/base'
 import { getActions } from './actions.js'
 import { getFeedbacks } from './feedbacks.js'
 import { getPresets } from './presets.js'
-import api from './lib/api.js'
+import api, { formatLiveValue } from './lib/api.js'
 
 const MAX_APPS = 8
 
@@ -15,6 +15,7 @@ const compStateVarId = (appKey, comp) => `comp_${appKey}_${sanitize(comp)}_state
 const selValueVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}`
 const selLabelVarId = (appKey, node) => `sel_${appKey}_${sanitize(node)}_label`
 const numValueVarId = (appKey, node) => `num_${appKey}_${sanitize(node)}`
+const liveValueVarId = (appKey, node) => `live_${appKey}_${sanitize(node)}`
 
 const UNDO_DEPTH = 10
 // Per-app reconnect backoff schedule (ms), clamped to the last value.
@@ -45,6 +46,11 @@ class SingularInstance extends InstanceBase {
 		this.selLabels = new Map()
 		// Number-node values Companion last set, keyed by `${token}|${controlnodeId}`.
 		this.numValues = new Map()
+		// Live control-node values read back from Singular, keyed the same way.
+		// Unlike selValues/numValues these ARE authoritative for the control app:
+		// they reflect whatever last set the node, including the Singular UI, an
+		// external API call, or a composition script — not just Companion.
+		this.liveValues = new Map()
 		// Pending auto-take-out timers, keyed by `${token}|${compName}`.
 		this.autoOutTimers = new Map()
 		// Saved scene snapshots, keyed by `${token}|${name}`.
@@ -506,6 +512,22 @@ class SingularInstance extends InstanceBase {
 		}
 	}
 
+	// Every control node the module knows about for an app, as { id, label }.
+	// Deduped because number nodes deliberately land in two buckets, and buttons
+	// are skipped — their payload is only a click stamp.
+	liveNodes(choices) {
+		const seen = new Set()
+		const nodes = []
+		for (const bucket of ['controlnodes', 'checkboxes', 'colors', 'selections', 'timers']) {
+			for (const node of choices?.[bucket] ?? []) {
+				if (seen.has(node.id)) continue
+				seen.add(node.id)
+				nodes.push(node)
+			}
+		}
+		return nodes
+	}
+
 	buildVariableDefinitions(appChoices, choicesByToken) {
 		const defs = [
 			{ variableId: 'last_action', name: 'Last action' },
@@ -529,6 +551,9 @@ class SingularInstance extends InstanceBase {
 			}
 			for (const num of choices.numbers) {
 				defs.push({ variableId: numValueVarId(app.id, num.id), name: `${app.label} / ${num.label} — value (last set)` })
+			}
+			for (const node of this.liveNodes(choices)) {
+				defs.push({ variableId: liveValueVarId(app.id, node.id), name: `${app.label} / ${node.label} — live value` })
 			}
 		}
 
@@ -570,6 +595,9 @@ class SingularInstance extends InstanceBase {
 			for (const num of choices.numbers) {
 				values[numValueVarId(app.id, num.id)] = this.numValues.get(`${app.id}|${num.id}`) ?? ''
 			}
+			for (const node of this.liveNodes(choices)) {
+				values[liveValueVarId(app.id, node.id)] = formatLiveValue(this.liveValues.get(`${app.id}|${node.id}`))
+			}
 		}
 
 		this.setVariableValues(values)
@@ -584,6 +612,9 @@ class SingularInstance extends InstanceBase {
 			if (!choices) continue
 			for (const comp of choices.compositions) {
 				values[compStateVarId(app.id, comp.id)] = this.compStates.get(`${app.id}|${comp.id}`) ?? ''
+			}
+			for (const node of this.liveNodes(choices)) {
+				values[liveValueVarId(app.id, node.id)] = formatLiveValue(this.liveValues.get(`${app.id}|${node.id}`))
 			}
 		}
 
@@ -895,9 +926,14 @@ class SingularInstance extends InstanceBase {
 			for (const [key, conn] of [...this.connections]) {
 				const status = this.appStatus.get(key)
 				try {
-					const states = await conn.getModelStates()
+					// /control carries both animation state and live node values in one
+					// call, and is smaller than /model — which only ever returns defaults.
+					const { states, values } = await conn.getControlState()
 					for (const [comp, state] of Object.entries(states)) {
 						this.compStates.set(`${key}|${comp}`, state)
+					}
+					for (const [node, value] of Object.entries(values)) {
+						this.liveValues.set(`${key}|${node}`, value)
 					}
 					if (status) {
 						status.lastSync = Date.now()
@@ -922,7 +958,14 @@ class SingularInstance extends InstanceBase {
 
 			this.updateStateVariables()
 			this.updateAppStatusVars()
-			this.checkFeedbacks('compositionIsIn', 'anyCompLive', 'appConnected', 'syncStale')
+			this.checkFeedbacks(
+				'compositionIsIn',
+				'anyCompLive',
+				'appConnected',
+				'syncStale',
+				'checkboxIsChecked',
+				'liveValueIs',
+			)
 		} finally {
 			this.polling = false
 		}

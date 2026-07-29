@@ -1,5 +1,7 @@
 import { combineRgb } from '@companion-module/base'
 
+import { formatLiveValue } from './lib/api.js'
+
 function tokenField(apps) {
 	return {
 		type: 'dropdown',
@@ -10,7 +12,7 @@ function tokenField(apps) {
 	}
 }
 
-// Build an isVisible function safely — values are JSON-encoded so ids/names
+// Build an isVisible function safely. Values are JSON-encoded so ids/names
 // containing quotes or apostrophes can't break the generated function.
 function isVisibleFor(token, extraField, extraValue) {
 	const parts = [`options.token == ${JSON.stringify(token)}`]
@@ -69,9 +71,8 @@ export function getFeedbacks(apps, choicesByToken) {
 			type: 'boolean',
 			name: 'Selection Node: Is Active Value (last set by Companion)',
 			description:
-				'Active when the value Companion last set for this selection node matches the chosen value. ' +
-				'Note: this reflects what Companion set, not live Singular state — it can be stale if data streams or ' +
-				'the composition JavaScript change the value.',
+				'Active when the value Companion last set for this node matches the chosen value. ' +
+				'Tracks what Companion sent, so it goes stale if a data stream or composition script changes the value.',
 			defaultStyle: {
 				bgcolor: combineRgb(0, 102, 204),
 				color: combineRgb(255, 255, 255),
@@ -111,7 +112,9 @@ export function getFeedbacks(apps, choicesByToken) {
 		selectionIsOneOf: {
 			type: 'boolean',
 			name: 'Selection Node: Is One Of (last set by Companion)',
-			description: 'Active when the value Companion last set for this selection node is any of the chosen values.',
+			description:
+				'Active when the value Companion last set for this node is one of the chosen values. ' +
+				'Tracks what Companion sent, not live Singular state.',
 			defaultStyle: {
 				bgcolor: combineRgb(0, 102, 204),
 				color: combineRgb(255, 255, 255),
@@ -181,7 +184,9 @@ export function getFeedbacks(apps, choicesByToken) {
 		numberThreshold: {
 			type: 'boolean',
 			name: 'Number Node: Threshold',
-			description: 'Active when a number node (as last set by Companion) meets the comparison.',
+			description:
+				'Active when a number node meets the comparison. Uses the value Companion last set, not live ' +
+				'Singular state.',
 			defaultStyle: {
 				bgcolor: combineRgb(204, 102, 0),
 				color: combineRgb(0, 0, 0),
@@ -280,6 +285,104 @@ export function getFeedbacks(apps, choicesByToken) {
 				const status = this.appStatus?.get(feedback.options.token)
 				if (!status?.lastSync) return true
 				return (Date.now() - status.lastSync) / 1000 > Number(feedback.options.seconds)
+			},
+		},
+		checkboxIsChecked: {
+			type: 'boolean',
+			name: 'Checkbox Node: Is Checked (live)',
+			description:
+				'Active when the checkbox is checked in Singular. Read live on every poll, so it stays correct when ' +
+				'something other than Companion changes it.',
+			defaultStyle: {
+				bgcolor: combineRgb(0, 204, 0),
+				color: combineRgb(0, 0, 0),
+			},
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = choicesByToken[app.id]?.checkboxes ?? []
+					return {
+						type: 'dropdown',
+						label: 'Checkbox Node',
+						id: `controlnode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{
+					type: 'checkbox',
+					label: 'Active when checked (uncheck to invert)',
+					id: 'expected',
+					default: true,
+				},
+			],
+			callback: (feedback) => {
+				const token = feedback.options.token
+				const controlnode = feedback.options[`controlnode_${token}`]
+				const current = this.liveValues?.get(`${token}|${controlnode}`)
+				if (current === undefined) return false
+				return Boolean(current) === Boolean(feedback.options.expected)
+			},
+		},
+		liveValueIs: {
+			type: 'boolean',
+			name: 'Control Node: Live Value Is',
+			description:
+				'Compares the live value of a control node in Singular against text. Matching is literal, so ' +
+				'"contains" is usually the safest choice.',
+			defaultStyle: {
+				bgcolor: combineRgb(0, 102, 204),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [
+				tokenField(apps),
+				...apps.map((app) => {
+					const choices = this.liveNodes(choicesByToken[app.id])
+					return {
+						type: 'dropdown',
+						label: 'Control Node',
+						id: `livenode_${app.id}`,
+						choices,
+						default: choices?.[0]?.id,
+						isVisible: isVisibleFor(app.id),
+					}
+				}),
+				{
+					type: 'dropdown',
+					label: 'Comparison',
+					id: 'op',
+					choices: [
+						{ id: 'contains', label: 'contains' },
+						{ id: 'eq', label: 'equals' },
+						{ id: 'ne', label: 'does not equal' },
+						{ id: 'notempty', label: 'is not empty' },
+						{ id: 'empty', label: 'is empty (or never set)' },
+					],
+					default: 'contains',
+				},
+				{ type: 'textinput', label: 'Value', id: 'value', default: '' },
+			],
+			callback: (feedback) => {
+				const token = feedback.options.token
+				const node = feedback.options[`livenode_${token}`]
+				const current = formatLiveValue(this.liveValues?.get(`${token}|${node}`))
+				const expected = String(feedback.options.value ?? '')
+
+				switch (feedback.options.op) {
+					case 'contains':
+						return expected !== '' && current.includes(expected)
+					case 'eq':
+						return current === expected
+					case 'ne':
+						return current !== expected
+					case 'notempty':
+						return current !== ''
+					case 'empty':
+						return current === ''
+					default:
+						return false
+				}
 			},
 		},
 		undoAvailable: {
