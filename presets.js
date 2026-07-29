@@ -34,7 +34,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `Take In: ${comp.label}`,
-			style: base(`IN\\n${comp.label}`),
+			style: base(`IN\n${comp.label}`),
 			steps: [{ down: [{ actionId: 'animateIn', options: compOpt }], up: [] }],
 			feedbacks: [isInFeedback],
 		}
@@ -42,7 +42,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `Take Out: ${comp.label}`,
-			style: base(`OUT\\n${comp.label}`),
+			style: base(`OUT\n${comp.label}`),
 			steps: [{ down: [{ actionId: 'animateOut', options: compOpt }], up: [] }],
 			feedbacks: [],
 		}
@@ -62,7 +62,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `Cycle Next: ${selection.label}`,
-			style: base(`${selection.label}\\n▶`),
+			style: base(`${selection.label}\n▶`),
 			steps: [{ down: [{ actionId: 'cycleSelectionNode', options: { ...selOpt, direction: '1' } }], up: [] }],
 			feedbacks: [],
 		}
@@ -70,7 +70,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `Cycle Prev: ${selection.label}`,
-			style: base(`◀\\n${selection.label}`),
+			style: base(`◀\n${selection.label}`),
 			steps: [{ down: [{ actionId: 'cycleSelectionNode', options: { ...selOpt, direction: '-1' } }], up: [] }],
 			feedbacks: [],
 		}
@@ -82,7 +82,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `+1: ${number.label}`,
-			style: base(`+1\\n${number.label}`),
+			style: base(`+1\n${number.label}`),
 			steps: [{ down: [{ actionId: 'adjustNumberNode', options: { ...numOpt, step: 1 } }], up: [] }],
 			feedbacks: [],
 		}
@@ -90,7 +90,7 @@ export function getPresets(appChoices, choicesByToken) {
 			type: 'button',
 			category: CATEGORY,
 			name: `-1: ${number.label}`,
-			style: base(`-1\\n${number.label}`),
+			style: base(`-1\n${number.label}`),
 			steps: [{ down: [{ actionId: 'adjustNumberNode', options: { ...numOpt, step: -1 } }], up: [] }],
 			feedbacks: [],
 		}
@@ -100,7 +100,7 @@ export function getPresets(appChoices, choicesByToken) {
 		type: 'button',
 		category: CATEGORY,
 		name: 'Take Out All (this app)',
-		style: base('TAKE\\nOUT\\nALL', RED),
+		style: base('TAKE\nOUT\nALL', RED),
 		steps: [{ down: [{ actionId: 'takeOutAllOutput', options: { token: app.id } }], up: [] }],
 		feedbacks: [],
 	}

@@ -77,6 +77,11 @@ class SingularInstance extends InstanceBase {
 		this.stopPolling()
 		this.clearAllAutoOut()
 		this.clearReconnects()
+		// A debounced persist still in flight would call saveConfig on a torn-down instance.
+		if (this.saveTimer) {
+			clearTimeout(this.saveTimer)
+			this.saveTimer = null
+		}
 		this.connections = new Map()
 		this.compStates = new Map()
 		this.log('debug', 'Singular module destroyed')
@@ -391,7 +396,7 @@ class SingularInstance extends InstanceBase {
 			return true
 		} catch (err) {
 			if (status) status.connected = false
-			const reason = err && err.toString().toLowerCase() === 'not found' ? 'Invalid token' : err
+			const reason = err?.message?.toLowerCase() === 'not found' ? 'Invalid token' : err
 			this.log('warn', `Control App "${app.label}": ${reason}`)
 			this.scheduleReconnect(app)
 			return false
