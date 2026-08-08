@@ -23,6 +23,8 @@ const RECONNECT_BACKOFF = [2000, 5000, 15000, 30000]
 // Consecutive poll failures before a connected app is dropped and reconnected.
 const POLL_FAIL_LIMIT = 3
 const IDLE_POLL_AFTER = 10
+const DEFAULT_IDLE_POLL = 15
+const DEFAULT_DAILY_BUDGET = 100000
 const BUDGET_PAUSE_AT = 0.95
 const BUDGET_WARN_AT = 0.8
 const BUDGET_RECHECK_MS = 60000
@@ -175,7 +177,7 @@ class SingularInstance extends InstanceBase {
 			width: 12,
 			min: 0,
 			max: 300,
-			default: 15,
+			default: DEFAULT_IDLE_POLL,
 		})
 
 		fields.push({
@@ -190,7 +192,7 @@ class SingularInstance extends InstanceBase {
 			width: 12,
 			min: 0,
 			max: 10000000,
-			default: 100000,
+			default: DEFAULT_DAILY_BUDGET,
 		})
 
 		fields.push({
@@ -963,7 +965,7 @@ class SingularInstance extends InstanceBase {
 	}
 
 	dailyBudget() {
-		const raw = Number(this.config?.dailyBudget)
+		const raw = Number(this.config?.dailyBudget ?? DEFAULT_DAILY_BUDGET)
 		return Number.isFinite(raw) && raw > 0 ? raw : 0
 	}
 
@@ -1053,7 +1055,7 @@ class SingularInstance extends InstanceBase {
 		const base = Math.max(0, Number(this.config?.pollInterval ?? 2) || 0)
 		if (base <= 0) return 0
 
-		const idle = Math.max(0, Number(this.config?.idlePollInterval ?? 0) || 0)
+		const idle = Math.max(0, Number(this.config?.idlePollInterval ?? DEFAULT_IDLE_POLL) || 0)
 		if (idle > base && this.idleTicks >= IDLE_POLL_AFTER) return idle
 		return base
 	}
