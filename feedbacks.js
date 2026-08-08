@@ -258,6 +258,36 @@ export function getFeedbacks(apps, choicesByToken) {
 				return false
 			},
 		},
+		apiBudget: {
+			type: 'boolean',
+			name: 'API: Daily Budget Above Threshold',
+			description:
+				'Active once the day\'s API consumption passes the given percentage of the configured budget. Put this ' +
+				'on a status button so a long or doubled-up show day is visible before polling auto-pauses.',
+			defaultStyle: {
+				bgcolor: combineRgb(200, 100, 0),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [{ type: 'number', label: 'Used more than (%)', id: 'percent', default: 75, min: 1, max: 100 }],
+			callback: (feedback) => {
+				const budget = this.dailyBudget()
+				if (!budget) return false
+				return (this.apiUsage.count / budget) * 100 > Number(feedback.options.percent)
+			},
+		},
+		pollingPaused: {
+			type: 'boolean',
+			name: 'API: Polling Paused',
+			description:
+				'Active while polling is stopped — either switched off by the Polling action or auto-paused because the ' +
+				'daily budget ran low. Buttons still fire; only live feedback is frozen.',
+			defaultStyle: {
+				bgcolor: combineRgb(200, 0, 0),
+				color: combineRgb(255, 255, 255),
+			},
+			options: [],
+			callback: () => this.pollingPaused(),
+		},
 		appConnected: {
 			type: 'boolean',
 			name: 'App: Connected',

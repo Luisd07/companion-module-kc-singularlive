@@ -1,3 +1,11 @@
+export function describeFailure(res) {
+	const parts = []
+	if (res?.detail) parts.push(`API said: ${res.detail}`)
+	if (res?.error) parts.push(String(res.error?.message ?? res.error))
+	if (res?.request) parts.push(`sent: ${String(res.request).slice(0, 300)}`)
+	return parts.length ? ` — ${parts.join(' | ')}` : ''
+}
+
 function tokenField(apps) {
 	return {
 		type: 'dropdown',
@@ -43,7 +51,7 @@ export function getActions(apps, choicesByToken) {
 	const send = async (promise, what) => {
 		const res = await promise
 		if (!res?.ok) {
-			this.log('warn', `${what} failed${res?.status ? ` (HTTP ${res.status})` : ''}`)
+			this.log('warn', `${what} failed${res?.status ? ` (HTTP ${res.status})` : ''}${describeFailure(res)}`)
 			return false
 		}
 		return true
@@ -892,6 +900,28 @@ export function getActions(apps, choicesByToken) {
 			],
 			callback: async (action) => {
 				await this.reconnectApp(action.options.token || undefined)
+			},
+		},
+		setPolling: {
+			name: 'Polling On/Off',
+			description:
+				'Stop or start polling Singular for live state. Takes and control changes keep working either way — ' +
+				'only on-air feedback goes stale. Use this to spend nothing on quota during dark hours between sessions.',
+			options: [
+				{
+					type: 'dropdown',
+					label: 'Polling',
+					id: 'mode',
+					choices: [
+						{ id: 'toggle', label: 'Toggle' },
+						{ id: 'on', label: 'On' },
+						{ id: 'off', label: 'Off' },
+					],
+					default: 'toggle',
+				},
+			],
+			callback: async (action) => {
+				this.setPolling(action.options.mode)
 			},
 		},
 		exportSnapshots: {

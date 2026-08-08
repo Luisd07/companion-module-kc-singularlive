@@ -2,7 +2,7 @@ import fs from 'node:fs'
 
 import { InstanceBase, runEntrypoint } from '@companion-module/base'
 
-import { getActions } from './actions.js'
+import { describeFailure, getActions } from './actions.js'
 import { getFeedbacks } from './feedbacks.js'
 import { getPresets } from './presets.js'
 import api, { formatLiveValue } from './lib/api.js'
@@ -22,13 +22,19 @@ const UNDO_DEPTH = 10
 const RECONNECT_BACKOFF = [2000, 5000, 15000, 30000]
 // Consecutive poll failures before a connected app is dropped and reconnected.
 const POLL_FAIL_LIMIT = 3
+const IDLE_POLL_AFTER = 10
+const BUDGET_PAUSE_AT = 0.95
+const BUDGET_WARN_AT = 0.8
+const BUDGET_RECHECK_MS = 60000
 
 const appConnectedVarId = (appKey) => `app_${appKey}_connected`
 const appLastSyncVarId = (appKey) => `app_${appKey}_last_sync`
 
+const todayKey = () => new Date().toLocaleDateString('en-CA')
+
 // Config keys that require a reconnect when they change. Everything else (e.g.
 // the persisted-state blob we write back) can change without re-initialising.
-const CONNECTION_KEYS = ['numApps', 'pollInterval', 'apiurl']
+const CONNECTION_KEYS = ['numApps', 'apiurl']
 for (let i = 0; i < MAX_APPS; i++) CONNECTION_KEYS.push(`app_${i}_name`, `app_${i}_token`)
 
 class SingularInstance extends InstanceBase {
@@ -70,6 +76,12 @@ class SingularInstance extends InstanceBase {
 		this.lastAction = ''
 		this.pollTimer = null
 		this.saveTimer = null
+		// Daily API consumption, persisted so a restart doesn't reset the count.
+		this.apiUsage = { date: todayKey(), count: 0 }
+		this.budgetPaused = false
+		this.budgetWarned = false
+		this.pollingEnabled = true
+		this.idleTicks = 0
 	}
 
 	async init(config) {
@@ -152,6 +164,36 @@ class SingularInstance extends InstanceBase {
 		})
 
 		fields.push({
+			type: 'number',
+			id: 'idlePollInterval',
+			label: 'Idle polling interval (seconds, 0 = never back off)',
+			tooltip:
+				`After ${IDLE_POLL_AFTER} polls with nothing changing, drop to this slower rate to conserve the daily ` +
+				'API quota. Any take from Companion snaps straight back to the fast rate, so this only slows down ' +
+				'detection of changes made outside Companion while the show is idle. Must be higher than the polling ' +
+				'interval to have any effect.',
+			width: 12,
+			min: 0,
+			max: 300,
+			default: 15,
+		})
+
+		fields.push({
+			type: 'number',
+			id: 'dailyBudget',
+			label: 'Daily API call budget (0 = unlimited)',
+			tooltip:
+				'Singular meters API calls per account per day. The module counts every call it makes, warns at ' +
+				`${Math.round(BUDGET_WARN_AT * 100)}%, and pauses polling at ${Math.round(BUDGET_PAUSE_AT * 100)}% so ` +
+				'the remainder is left for takes. Takes are never blocked. If two Companion machines share one ' +
+				'Singular account, give each a share of the account total, not the whole 100000.',
+			width: 12,
+			min: 0,
+			max: 10000000,
+			default: 100000,
+		})
+
+		fields.push({
 			type: 'textinput',
 			id: 'logFile',
 			label: 'Activity log CSV file (blank = off)',
@@ -178,10 +220,16 @@ class SingularInstance extends InstanceBase {
 		// Only reconnect when a connection-relevant field changed. This avoids a
 		// re-init loop when we write our own persisted-state blob back via saveConfig.
 		const reconnect = CONNECTION_KEYS.some((key) => this.config?.[key] !== config[key])
+		const pollingChanged = ['pollInterval', 'idlePollInterval', 'dailyBudget'].some(
+			(key) => this.config?.[key] !== config[key],
+		)
 		this.config = config
 
 		if (reconnect) {
 			this.initSingularLive(this.config)
+		} else if (pollingChanged) {
+			this.startPolling()
+			this.updateBudgetVars()
 		}
 	}
 
@@ -193,6 +241,7 @@ class SingularInstance extends InstanceBase {
 			numValues: Object.fromEntries(this.numValues),
 			snapshots: Object.fromEntries(this.snapshots),
 			rundownState: Object.fromEntries(this.rundownState),
+			apiUsage: this.apiUsage,
 		}
 	}
 
@@ -208,6 +257,10 @@ class SingularInstance extends InstanceBase {
 			this.numValues = new Map(Object.entries(state.numValues ?? {}))
 			this.snapshots = new Map(Object.entries(state.snapshots ?? {}))
 			this.rundownState = new Map(Object.entries(state.rundownState ?? {}))
+			// A stale date means the quota has since reset.
+			if (state.apiUsage?.date === todayKey() && Number.isFinite(state.apiUsage.count)) {
+				this.apiUsage = { date: state.apiUsage.date, count: state.apiUsage.count }
+			}
 		} catch {
 			this.log('warn', 'Could not parse persisted state; starting fresh')
 		}
@@ -386,7 +439,7 @@ class SingularInstance extends InstanceBase {
 	async connectApp(app) {
 		const status = this.appStatus.get(app.key)
 		try {
-			const conn = new api(app.token)
+			const conn = new api(app.token, () => this.countApiCall())
 			await conn.Connect()
 			const elements = await conn.getElements()
 
@@ -469,7 +522,9 @@ class SingularInstance extends InstanceBase {
 		if (total === 0) return
 		const connected = this.apps.filter((a) => this.connections.has(a.key)).length
 
-		if (connected === total) {
+		if (this.budgetPaused && connected > 0) {
+			this.updateStatus('unknown_warning', 'API budget low — polling paused')
+		} else if (connected === total) {
 			this.updateStatus('ok')
 		} else if (connected > 0) {
 			this.updateStatus('unknown_warning', `${total - connected} of ${total} apps disconnected`)
@@ -534,6 +589,11 @@ class SingularInstance extends InstanceBase {
 			{ variableId: 'undo_last', name: 'Undo — next action to undo' },
 			{ variableId: 'snapshots_export', name: 'Snapshots (JSON export)' },
 			{ variableId: 'activity_count', name: 'Activity log — rows this session' },
+			{ variableId: 'api_calls_today', name: 'API calls used today' },
+			{ variableId: 'api_calls_remaining', name: 'API calls remaining today' },
+			{ variableId: 'api_budget_pct', name: 'API budget used (%)' },
+			{ variableId: 'api_calls_per_hour', name: 'API calls/hour at current rate' },
+			{ variableId: 'poll_interval_active', name: 'Polling — active interval' },
 		]
 
 		for (const app of appChoices) {
@@ -574,6 +634,11 @@ class SingularInstance extends InstanceBase {
 			undo_last: this.undoStack[this.undoStack.length - 1]?.description ?? '',
 			snapshots_export: '',
 			activity_count: String(this.activityLog.length),
+			api_calls_today: this.apiUsage.count,
+			api_calls_remaining: this.dailyBudget() ? Math.max(0, this.dailyBudget() - this.apiUsage.count) : 'unlimited',
+			api_budget_pct: this.dailyBudget() ? Math.round((this.apiUsage.count / this.dailyBudget()) * 100) : 0,
+			api_calls_per_hour: this.projectedHourlyRate(),
+			poll_interval_active: this.pollingPaused() ? 'paused' : `${this.effectivePollSeconds()}s`,
 		}
 
 		for (const app of appChoices) {
@@ -711,6 +776,7 @@ class SingularInstance extends InstanceBase {
 		this.compStates.set(`${token}|${comp}`, state)
 		this.setVariableValues({ [compStateVarId(token, comp)]: state })
 		this.checkFeedbacks('compositionIsIn', 'anyCompLive')
+		this.wakePolling()
 	}
 
 	// Take Out All clears every composition in the app — reflect that at once,
@@ -790,6 +856,7 @@ class SingularInstance extends InstanceBase {
 		}
 		this.setVariableValues(values)
 		this.checkFeedbacks('compositionIsIn', 'anyCompLive')
+		this.wakePolling()
 	}
 
 	// Capture the current on-air states and Companion-set selection values for an
@@ -895,24 +962,158 @@ class SingularInstance extends InstanceBase {
 		}
 	}
 
+	dailyBudget() {
+		const raw = Number(this.config?.dailyBudget)
+		return Number.isFinite(raw) && raw > 0 ? raw : 0
+	}
+
+	// Called once per outbound request by the api layer.
+	countApiCall() {
+		const today = todayKey()
+		if (this.apiUsage.date !== today) {
+			this.log('info', `API quota: new day, ${this.apiUsage.count} calls used on ${this.apiUsage.date}`)
+			this.apiUsage = { date: today, count: 0 }
+			this.budgetPaused = false
+			this.budgetWarned = false
+		}
+		this.apiUsage.count++
+		// Checkpoint occasionally rather than thrashing saveConfig on every call.
+		if (this.apiUsage.count % 250 === 0) this.persist()
+
+		const budget = this.dailyBudget()
+		if (!budget) return
+
+		if (!this.budgetWarned && this.apiUsage.count >= budget * BUDGET_WARN_AT) {
+			this.budgetWarned = true
+			this.log(
+				'warn',
+				`API quota: ${this.apiUsage.count} of ${budget} calls used today. Polling will pause automatically at ` +
+					`${Math.round(BUDGET_PAUSE_AT * 100)}%. Takes and control changes are unaffected.`,
+			)
+		}
+		if (!this.budgetPaused && this.apiUsage.count >= budget * BUDGET_PAUSE_AT) {
+			this.budgetPaused = true
+			this.log(
+				'error',
+				`API quota: ${this.apiUsage.count} of ${budget} calls used today — polling PAUSED to protect the ` +
+					`remaining budget. Buttons still work; on-air feedback will stop updating until the daily reset.`,
+			)
+			this.stopPolling()
+			this.scheduleBudgetRecheck()
+			this.updateAggregateStatus()
+		}
+	}
+
+	// While paused, wake periodically to notice the day rolling over.
+	scheduleBudgetRecheck() {
+		this.stopPolling()
+		this.pollTimer = setTimeout(() => {
+			this.pollTimer = null
+			if (this.apiUsage.date !== todayKey()) {
+				this.apiUsage = { date: todayKey(), count: 0 }
+				this.budgetPaused = false
+				this.budgetWarned = false
+				this.log('info', 'API quota: daily reset — polling resumed')
+				this.updateAggregateStatus()
+				this.startPolling()
+			} else {
+				this.scheduleBudgetRecheck()
+			}
+		}, BUDGET_RECHECK_MS)
+		this.updateBudgetVars()
+	}
+
+	updateBudgetVars() {
+		const budget = this.dailyBudget()
+		const used = this.apiUsage.count
+		this.setVariableValues({
+			api_calls_today: used,
+			api_calls_remaining: budget ? Math.max(0, budget - used) : 'unlimited',
+			api_budget_pct: budget ? Math.round((used / budget) * 100) : 0,
+			api_calls_per_hour: this.projectedHourlyRate(),
+			poll_interval_active: this.pollingPaused() ? 'paused' : `${this.effectivePollSeconds()}s`,
+		})
+	}
+
+	// Polling requests/hour at the current rate. Writes aren't projectable, so
+	// this is a floor, not a forecast.
+	projectedHourlyRate() {
+		const seconds = this.effectivePollSeconds()
+		if (!seconds || this.pollingPaused()) return 0
+		return Math.round((3600 / seconds) * Math.max(this.connections?.size ?? 0, 1))
+	}
+
+	pollingPaused() {
+		return this.budgetPaused || !this.pollingEnabled
+	}
+
+	// Interval for the next tick, backed off to the idle rate after a run of
+	// unchanged polls.
+	effectivePollSeconds() {
+		const base = Math.max(0, Number(this.config?.pollInterval ?? 2) || 0)
+		if (base <= 0) return 0
+
+		const idle = Math.max(0, Number(this.config?.idlePollInterval ?? 0) || 0)
+		if (idle > base && this.idleTicks >= IDLE_POLL_AFTER) return idle
+		return base
+	}
+
+	// Snap back to the fast rate after a Companion-driven change.
+	wakePolling() {
+		const wasIdle = this.idleTicks >= IDLE_POLL_AFTER
+		this.idleTicks = 0
+		if (wasIdle && this.pollTimer && !this.pollingPaused()) this.startPolling()
+	}
+
 	startPolling() {
 		this.stopPolling()
 
-		// Poll immediately so state is fresh, then on the configured interval.
-		this.pollStates()
-
-		const interval = this.config?.pollInterval ?? 2
-		const seconds = Math.max(0, Number(interval) || 0)
-		if (seconds > 0) {
-			this.pollTimer = setInterval(() => this.pollStates(), seconds * 1000)
+		if (this.pollingPaused()) {
+			if (this.budgetPaused) this.scheduleBudgetRecheck()
+			this.updateBudgetVars()
+			return
 		}
+
+		// Poll immediately so state is fresh, then reschedule after each completed
+		// poll — the gap has to be able to change as the show goes idle or busy.
+		this.pollStates().finally(() => this.scheduleNextPoll())
+	}
+
+	scheduleNextPoll() {
+		this.stopPolling()
+		if (this.pollingPaused()) {
+			if (this.budgetPaused) this.scheduleBudgetRecheck()
+			return
+		}
+
+		const seconds = this.effectivePollSeconds()
+		if (seconds <= 0) return
+
+		this.pollTimer = setTimeout(() => {
+			this.pollTimer = null
+			this.pollStates().finally(() => this.scheduleNextPoll())
+		}, seconds * 1000)
 	}
 
 	stopPolling() {
 		if (this.pollTimer) {
-			clearInterval(this.pollTimer)
+			clearTimeout(this.pollTimer)
 			this.pollTimer = null
 		}
+	}
+
+	// Operator control: 'on' | 'off' | 'toggle'.
+	setPolling(mode) {
+		const next = mode === 'toggle' ? !this.pollingEnabled : mode === 'on'
+		if (next === this.pollingEnabled) return
+
+		this.pollingEnabled = next
+		this.log('info', `Polling ${next ? 'resumed' : 'paused'} by action`)
+		if (next) this.startPolling()
+		else this.stopPolling()
+		this.updateBudgetVars()
+		this.checkFeedbacks('pollingPaused', 'apiBudget')
+		this.recordAction(`Polling ${next ? 'on' : 'off'}`)
 	}
 
 	async pollStates() {
@@ -922,6 +1123,7 @@ class SingularInstance extends InstanceBase {
 		if (this.polling) return
 		this.polling = true
 
+		let changed = false
 		try {
 			for (const [key, conn] of [...this.connections]) {
 				const status = this.appStatus.get(key)
@@ -930,10 +1132,16 @@ class SingularInstance extends InstanceBase {
 					// call, and is smaller than /model — which only ever returns defaults.
 					const { states, values } = await conn.getControlState()
 					for (const [comp, state] of Object.entries(states)) {
-						this.compStates.set(`${key}|${comp}`, state)
+						const mapKey = `${key}|${comp}`
+						if (this.compStates.get(mapKey) !== state) changed = true
+						this.compStates.set(mapKey, state)
 					}
 					for (const [node, value] of Object.entries(values)) {
-						this.liveValues.set(`${key}|${node}`, value)
+						const mapKey = `${key}|${node}`
+						// Compare serialised so object-valued nodes don't read as
+						// changed on every poll.
+						if (formatLiveValue(this.liveValues.get(mapKey)) !== formatLiveValue(value)) changed = true
+						this.liveValues.set(mapKey, value)
 					}
 					if (status) {
 						status.lastSync = Date.now()
@@ -942,6 +1150,8 @@ class SingularInstance extends InstanceBase {
 					}
 				} catch (err) {
 					this.log('debug', `Poll failed for app ${key}: ${err}`)
+					// A failing app isn't a quiet one — stay at the fast rate.
+					changed = true
 					if (status) {
 						status.failCount = (status.failCount ?? 0) + 1
 						// Drop a persistently-failing connection and let the backoff
@@ -956,8 +1166,11 @@ class SingularInstance extends InstanceBase {
 				}
 			}
 
+			this.idleTicks = changed ? 0 : this.idleTicks + 1
+
 			this.updateStateVariables()
 			this.updateAppStatusVars()
+			this.updateBudgetVars()
 			this.checkFeedbacks(
 				'compositionIsIn',
 				'anyCompLive',
@@ -965,6 +1178,8 @@ class SingularInstance extends InstanceBase {
 				'syncStale',
 				'checkboxIsChecked',
 				'liveValueIs',
+				'apiBudget',
+				'pollingPaused',
 			)
 		} finally {
 			this.polling = false
@@ -1015,8 +1230,9 @@ class SingularInstance extends InstanceBase {
 		const stateByComp = {}
 		for (const entry of entries) stateByComp[entry.composition] = entry.state
 
-		if (!(await conn.setStates(entries)).ok) {
-			this.log('warn', 'Rundown step failed')
+		const res = await conn.setStates(entries)
+		if (!res.ok) {
+			this.log('warn', `Rundown step failed${res.status ? ` (HTTP ${res.status})` : ''}${describeFailure(res)}`)
 			return
 		}
 		this.rundownState.set(key, next)
