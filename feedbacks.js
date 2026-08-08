@@ -262,7 +262,7 @@ export function getFeedbacks(apps, choicesByToken) {
 			type: 'boolean',
 			name: 'API: Daily Budget Above Threshold',
 			description:
-				'Active once the day\'s API consumption passes the given percentage of the configured budget. Put this ' +
+				"Active once the day's API consumption passes the given percentage of the configured budget. Put this " +
 				'on a status button so a long or doubled-up show day is visible before polling auto-pauses.',
 			defaultStyle: {
 				bgcolor: combineRgb(200, 100, 0),
