@@ -144,11 +144,13 @@ class SingularInstance extends InstanceBase {
 			label: 'Polling interval (seconds, 0 = off)',
 			tooltip:
 				'How often to poll Singular for composition on-air state. Companion-driven takes update instantly ' +
-				'regardless of this; polling only catches takes made outside Companion. 1-2s feels live; lower adds API load.',
+				'regardless of this; polling only catches changes made outside Companion (e.g. the Singular web app). ' +
+				'Each poll is one REST API call per app: calls/day = 86400 / interval x apps (2s with 3 apps is ~130k/day). ' +
+				'Use 0 if only Companion controls the apps; the Reconnect action resyncs on demand.',
 			width: 12,
 			min: 0,
 			max: 60,
-			default: 2,
+			default: 30,
 		})
 
 		fields.push({
@@ -443,7 +445,8 @@ class SingularInstance extends InstanceBase {
 		this.reconnectTimers.clear()
 	}
 
-	// Manual reconnect for one app (or all), used by the Reconnect action.
+	// Manual reconnect for one app (or all), used by the Reconnect action. Also
+	// re-reads live state once, so it doubles as a resync when polling is off.
 	async reconnectApp(token) {
 		const targets = token ? this.apps.filter((a) => a.key === token) : this.apps
 		for (const app of targets) await this.connectApp(app)
@@ -452,6 +455,7 @@ class SingularInstance extends InstanceBase {
 		this.updateAppStatusVars()
 		this.updateAggregateStatus()
 		this.checkFeedbacks('appConnected', 'syncStale')
+		await this.pollStates(targets.map((a) => a.key))
 	}
 
 	// Rebuild action/feedback/variable/preset definitions from the current choices.
@@ -734,13 +738,19 @@ class SingularInstance extends InstanceBase {
 
 	// Take In a composition, then auto Take Out after `seconds`. Re-triggering
 	// the same composition cancels the pending take-out and restarts the timer.
+	// Resolves true only if Singular accepted the take, so callers can skip undo/logging.
 	async takeInWithTimeout(token, comp, seconds) {
 		const conn = this.connections?.get(token)
-		if (!conn || !comp) return
+		if (!conn || !comp) return false
 
-		await conn.animateIn(comp)
+		const res = await conn.animateIn(comp)
+		if (!res?.ok) {
+			this.log('warn', `Take In (timed): ${comp} failed${res?.status ? ` (HTTP ${res.status})` : ''}`)
+			return false
+		}
 		this.recordCompState(token, comp, 'In')
 		this.scheduleAutoOut(token, comp, seconds)
+		return true
 	}
 
 	scheduleAutoOut(token, comp, seconds) {
@@ -750,14 +760,19 @@ class SingularInstance extends InstanceBase {
 		if (secs <= 0) return
 
 		const key = `${token}|${comp}`
-		const id = setTimeout(() => {
+		const id = setTimeout(async () => {
 			this.autoOutTimers.delete(key)
-			const conn = this.connections?.get(token)
-			if (conn) {
-				conn.animateOut(comp)
-				this.recordCompState(token, comp, 'Out')
-			}
 			this.checkFeedbacks('timedTakeOutActive')
+			const conn = this.connections?.get(token)
+			if (!conn) return
+			const res = await conn.animateOut(comp)
+			// Skip if a re-trigger restarted the timer while the take-out was in flight.
+			if (res?.ok) {
+				if (!this.autoOutTimers.has(key)) this.recordCompState(token, comp, 'Out')
+			} else {
+				// Leave the button showing In — the graphic is most likely still on air.
+				this.log('warn', `Auto Take-Out: ${comp} failed${res?.status ? ` (HTTP ${res.status})` : ''}`)
+			}
 		}, secs * 1000)
 
 		this.autoOutTimers.set(key, id)
@@ -901,7 +916,7 @@ class SingularInstance extends InstanceBase {
 		// Poll immediately so state is fresh, then on the configured interval.
 		this.pollStates()
 
-		const interval = this.config?.pollInterval ?? 2
+		const interval = this.config?.pollInterval ?? 30
 		const seconds = Math.max(0, Number(interval) || 0)
 		if (seconds > 0) {
 			this.pollTimer = setInterval(() => this.pollStates(), seconds * 1000)
@@ -915,7 +930,8 @@ class SingularInstance extends InstanceBase {
 		}
 	}
 
-	async pollStates() {
+	// Polls every connected app, or only `keys` when given (e.g. after a manual reconnect).
+	async pollStates(keys) {
 		if (!this.connections || this.connections.size === 0) return
 		// Overlap guard: never let a new poll start while one is still in flight,
 		// so a fast interval can't stack up requests against the API.
@@ -924,6 +940,7 @@ class SingularInstance extends InstanceBase {
 
 		try {
 			for (const [key, conn] of [...this.connections]) {
+				if (keys && !keys.includes(key)) continue
 				const status = this.appStatus.get(key)
 				try {
 					// /control carries both animation state and live node values in one

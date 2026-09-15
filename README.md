@@ -53,6 +53,17 @@ path) to test changes live.
 
 ## Changelog
 
+### v1.1.1
+
+- **Polling default 2s → 30s.** Each poll is one REST API call per app, and 2s
+  with 3 apps (~130k/day) exceeds Singular's daily REST quota. The setting's
+  tooltip now shows the cost; use 0 if only Companion controls the apps.
+- **Reconnect Control App resyncs state.** It now re-reads on-air state and live
+  values once, so it works as a manual resync when polling is off.
+- **Timed takes only record state on success.** A failed timed Take In no longer
+  lights the button or starts the auto-out timer, and a failed auto Take-Out
+  leaves the button showing In.
+
 ### v1.1.0
 
 - **Live state from Singular.** Polling moved from `/model` to `/control`, which

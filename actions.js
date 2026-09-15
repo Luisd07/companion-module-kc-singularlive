@@ -116,7 +116,7 @@ export function getActions(apps, choicesByToken) {
 				if (!connFor(action.options)) return
 				const comp = nodeFor(action.options, 'comp')
 				const compUndo = this.captureCompUndo(action.options.token, comp)
-				await this.takeInWithTimeout(action.options.token, comp, action.options.seconds)
+				if (!(await this.takeInWithTimeout(action.options.token, comp, action.options.seconds))) return
 				this.pushUndo(`Take In (timed): ${comp}`, () => {
 					this.clearAutoOut(action.options.token, comp)
 					compUndo()

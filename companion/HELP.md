@@ -16,9 +16,14 @@ selection cycling, timers, snapshots and more, with on-air feedback.
   window. Either form works:
   - URL: `https://app.singular.live/apiv2/control/172pQ2N1HLagEeayAci0Z4`
   - Token: `172pQ2N1HLagEeayAci0Z4`
-- **Polling interval** — how often the module reads composition on-air state
-  from Singular (0 = off). Companion-driven takes update instantly regardless;
-  polling only catches takes made outside Companion. 1–2s feels live.
+- **Polling interval** — how often the module reads on-air state and live values
+  from Singular (0 = off, default 30s). Companion-driven takes update instantly
+  on every surface regardless; polling only catches changes made outside
+  Companion (e.g. in the Singular web app, or graphics that auto-out inside
+  Singular). Each poll is one REST API call **per app**, and Singular accounts
+  have a daily REST quota: calls/day = 86400 ÷ interval × apps (2s with 3 apps
+  ≈ 130k/day). If only Companion controls the apps, use 0 — the state is read
+  once at startup, and the **Reconnect Control App** action resyncs on demand.
 - **Activity log CSV file** — optional absolute path; every action fired is
   appended as a timestamped CSV row for post-show review.
 
