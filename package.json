@@ -15,13 +15,13 @@
 		"lint": "yarn lint:raw ."
 	},
 	"dependencies": {
-		"@companion-module/base": "~1.11.3",
+		"@companion-module/base": "~1.12.1",
 		"eslint": "^9.26.0",
 		"node-fetch": "^3.3.2"
 	},
 	"devDependencies": {
-		"@companion-module/tools": "^2.6.1",
-		"prettier": "^3.4.2"
+		"@companion-module/tools": "^2.8.0",
+		"prettier": "^3.6.2"
 	},
 	"engines": {
 		"node": "^22.12"
